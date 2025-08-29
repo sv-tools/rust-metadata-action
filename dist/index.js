@@ -25,11 +25,11 @@ async function run() {
   ]);
 
   cmd.stderr.on("data", (data) => {
-    throw new Error("Cargo metadata failed: " + data.toString().trim());
+    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.setFailed)("Cargo metadata failed: " + data.toString().trim());
   });
 
   cmd.on("error", (error) => {
-    throw new Error("cargo metadata failed: " + error.message);
+    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.setFailed)("cargo metadata failed: " + error.message);
   });
 
   cmd.stdout.on("data", (data) => {
