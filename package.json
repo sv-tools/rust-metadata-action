@@ -17,14 +17,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sv-tools/create-milestone-action.git"
+    "url": "git+https://github.com/sv-tools/rust-metadata-action.git"
   },
   "author": "Sergey Vilgelm <sergey@vilgelm.com> (https://vilgelm.com)",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/sv-tools/create-milestone-action/issues"
+    "url": "https://github.com/sv-tools/rust-metadata-action/issues"
   },
-  "homepage": "https://github.com/sv-tools/create-milestone-action#readme",
+  "homepage": "https://github.com/sv-tools/rust-metadata-action#readme",
   "dependencies": {
     "@actions/core": "^1.11.1",
     "@actions/github": "^6.0.1"
