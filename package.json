@@ -1,0 +1,36 @@
+{
+  "name": "rust-metadata-action",
+  "version": "0.1.0",
+  "description": "GitHub action to retrieve metadata, including crates, features, and other relevant information of the Rust project",
+  "keywords": [
+    "GitHub",
+    "Action",
+    "Rust",
+    "Metadata"
+  ],
+  "main": "index.js",
+  "scripts": {
+    "all": "npm run fmt && npm run build",
+    "build": "ncc build index.js --license licenses.txt",
+    "fmt": "prettier --write index.js package.json action.yml .github/dependabot.yml .github/workflows/*.yml",
+    "check": "prettier --check index.js package.json action.yml .github/dependabot.yml .github/workflows/*.yml"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sv-tools/create-milestone-action.git"
+  },
+  "author": "Sergey Vilgelm <sergey@vilgelm.com> (https://vilgelm.com)",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/sv-tools/create-milestone-action/issues"
+  },
+  "homepage": "https://github.com/sv-tools/create-milestone-action#readme",
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.1"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.3",
+    "prettier": "^3.6.2"
+  }
+}

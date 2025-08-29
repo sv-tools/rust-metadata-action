@@ -1,0 +1,22 @@
+name: "Rust Metadata Action"
+description: "GitHub action to retrieve metadata, including crates, features, and other relevant information of the Rust project"
+branding:
+  icon: "code"
+  color: "red"
+inputs:
+  manifest-path:
+    description: "Path to Cargo.toml manifest"
+    required: false
+    default: "Cargo.toml"
+outputs:
+  metadata:
+    description: "Raw Metadata"
+  crates:
+    description: "List of crates: [foo, bar, baz]"
+  publish:
+    description: "List of crates that can be published: [foo, bar]"
+  features:
+    description: "List of features: {foo: [bar, baz], bar: [baz]}"
+runs:
+  using: node24
+  main: "dist/index.js"
