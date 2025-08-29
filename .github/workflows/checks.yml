@@ -1,0 +1,63 @@
+name: "Code Analysis"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: "0 0 * * 0"
+
+concurrency:
+  group: ${{ format('{0}-{1}', github.workflow, github.head_ref) }}
+  cancel-in-progress: true
+
+permissions: read-all
+
+jobs:
+  Check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.5.0
+      - run: npm install
+      - run: npm run check
+  Test:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.5.0
+
+      - name: Checkout nuspec-rs as a test project
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.5.0
+        with:
+          repository: sv-tools/nuspec-rs
+          path: ./nuspec-rs
+      - id: nuspec-rs
+        uses: ./
+        with:
+          manifest-path: "./nuspec-rs/Cargo.toml"
+      - run: echo "Crates - ${{ steps.nuspec-rs.outputs.crates }}"
+      - run: echo "Publish - ${{ steps.nuspec-rs.outputs.publish }}"
+      - run: echo "Features - ${{ steps.nuspec-rs.outputs.features }}"
+      - run: echo "Nuspec features - ${{ toJSON(fromJSON(steps.nuspec-rs.outputs.features).nuspec) }}"
+      - run: echo "Nuspec-test features - ${{ toJSON(fromJSON(steps.nuspec-rs.outputs.features).nuspec-test) }}"
+
+      - name: Checkout roas as a test project
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.5.0
+        with:
+          repository: sv-tools/roas
+          path: ./roas
+      - id: roas
+        uses: ./
+        with:
+          manifest-path: "./roas/Cargo.toml"
+      - run: echo "Crates - ${{ steps.roas.outputs.crates }}"
+      - run: echo "Publish - ${{ steps.roas.outputs.publish }}"
+      - run: echo "Features - ${{ steps.roas.outputs.features }}"
+      - run: echo "Roas features - ${{ toJSON(fromJSON(steps.roas.outputs.features).roas) }}"
+
+      - uses: ./
+        continue-on-error: true
