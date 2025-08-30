@@ -27,21 +27,28 @@ async function run() {
 function setActionOutput(metadata) {
   setOutput("metadata", JSON.stringify(metadata));
   if (metadata.hasOwnProperty("packages")) {
-    let allCrates = [];
-    let cratesToPublish = [];
-    let features = {};
+    let allPackages = [];
+    let packagesToPublish = [];
+    let matrix = [];
     metadata.packages.forEach((pkg) => {
-      allCrates.push(pkg.name);
+      allPackages.push(pkg.name);
       if (pkg.hasOwnProperty("publish") && pkg.publish !== false) {
-        cratesToPublish.push(pkg.name);
+        packagesToPublish.push(pkg.name);
       }
       if (pkg.hasOwnProperty("features")) {
-        features[pkg.name] = Object.getOwnPropertyNames(pkg.features);
+        const names = Object.getOwnPropertyNames(pkg.features);
+        if (names.length === 0) {
+          matrix.push(`--package=${pkg.name}`);
+        } else {
+          names.forEach((feature) => {
+            matrix.push(`--package=${pkg.name} --features=${feature}`);
+          });
+        }
       }
     });
-    setOutput("crates", JSON.stringify(allCrates));
-    setOutput("publish", JSON.stringify(cratesToPublish));
-    setOutput("features", JSON.stringify(features));
+    setOutput("packages", JSON.stringify(allPackages));
+    setOutput("publish", JSON.stringify(packagesToPublish));
+    setOutput("matrix", JSON.stringify(matrix));
   }
 }
 
