@@ -1,5 +1,5 @@
 name: "Rust Metadata Action"
-description: "GitHub action to retrieve metadata, including crates, features, and other relevant information of the Rust project"
+description: "GitHub action to retrieve metadata, including packages, features, and other relevant information of the Rust project"
 branding:
   icon: "code"
   color: "red"
@@ -11,12 +11,12 @@ inputs:
 outputs:
   metadata:
     description: "Raw Metadata"
-  crates:
-    description: "List of crates: [foo, bar, baz]"
+  packages:
+    description: "List of packages: [foo, bar, baz]"
   publish:
-    description: "List of crates that can be published: [foo, bar]"
-  features:
-    description: "List of features: {foo: [bar, baz], bar: [baz]}"
+    description: "List of packages that can be published: [foo, bar]"
+  matrix:
+    description: "List of packages and their features: [--package=foo, --package=bar --features=foo, --package=bar --features=bar]"
 runs:
   using: node24
   main: "dist/index.js"

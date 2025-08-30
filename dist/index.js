@@ -40,21 +40,28 @@ async function run() {
 function setActionOutput(metadata) {
   (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.setOutput)("metadata", JSON.stringify(metadata));
   if (metadata.hasOwnProperty("packages")) {
-    let allCrates = [];
-    let cratesToPublish = [];
-    let features = {};
+    let allPackages = [];
+    let packagesToPublish = [];
+    let matrix = [];
     metadata.packages.forEach((pkg) => {
-      allCrates.push(pkg.name);
+      allPackages.push(pkg.name);
       if (pkg.hasOwnProperty("publish") && pkg.publish !== false) {
-        cratesToPublish.push(pkg.name);
+        packagesToPublish.push(pkg.name);
       }
       if (pkg.hasOwnProperty("features")) {
-        features[pkg.name] = Object.getOwnPropertyNames(pkg.features);
+        const names = Object.getOwnPropertyNames(pkg.features);
+        if (names.length === 0) {
+          matrix.push(`--package=${pkg.name}`);
+        } else {
+          names.forEach((feature) => {
+            matrix.push(`--package=${pkg.name} --features=${feature}`);
+          });
+        }
       }
     });
-    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.setOutput)("crates", JSON.stringify(allCrates));
-    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.setOutput)("publish", JSON.stringify(cratesToPublish));
-    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.setOutput)("features", JSON.stringify(features));
+    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.setOutput)("packages", JSON.stringify(allPackages));
+    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.setOutput)("publish", JSON.stringify(packagesToPublish));
+    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__.setOutput)("matrix", JSON.stringify(matrix));
   }
 }
 
