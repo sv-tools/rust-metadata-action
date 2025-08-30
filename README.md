@@ -92,12 +92,7 @@ jobs:
       - name: Publish crate (dry-run)
         run: cargo publish -p ${{ matrix.package }} --dry-run
       # Uncomment the real publish step once you're ready to publish for real
-      # - uses: rust-lang/crates-io-auth-action@v1
-      #   id: auth
-      # - name: Publish
-      #   env:
-      #     CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-      #  run: cargo publish -p ${{ matrix.package }}
+      #   run: cargo publish -p ${{ matrix.package }}
 ```
 
 ## Notes
