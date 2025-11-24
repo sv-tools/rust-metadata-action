@@ -20,7 +20,7 @@ jobs:
   Check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.5.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v5.5.0
       - run: npm install
       - run: npm run check
 
@@ -30,10 +30,10 @@ jobs:
       roas-matrix: ${{ steps.roas.outputs.matrix }}
       nuspec-matrix: ${{ steps.nuspec-rs.outputs.matrix }}
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.5.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v5.5.0
 
       - name: Checkout nuspec-rs as a test project
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.5.0
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v5.5.0
         with:
           repository: sv-tools/nuspec-rs
           path: ./nuspec-rs
@@ -46,7 +46,7 @@ jobs:
       - run: echo "Matrix - ${{ steps.nuspec-rs.outputs.matrix }}"
 
       - name: Checkout roas as a test project
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.5.0
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v5.5.0
         with:
           repository: sv-tools/roas
           path: ./roas
@@ -70,7 +70,7 @@ jobs:
         args: ${{ fromJson(needs.Test.outputs.roas-matrix) }}
     steps:
       - name: Checkout roas as a test project
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.5.0
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v5.5.0
         with:
           repository: sv-tools/roas
       - name: Run tests
@@ -84,7 +84,7 @@ jobs:
         args: ${{ fromJson(needs.Test.outputs.nuspec-matrix) }}
     steps:
       - name: Checkout nuspec-rs as a test project
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.5.0
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v5.5.0
         with:
           repository: sv-tools/nuspec-rs
       - name: Run tests
