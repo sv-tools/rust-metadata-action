@@ -1,6 +1,6 @@
 {
   "name": "rust-metadata-action",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "description": "GitHub action to retrieve metadata, including crates, features, and other relevant information of the Rust project",
   "keywords": [
     "GitHub",
@@ -9,11 +9,13 @@
     "Metadata"
   ],
   "main": "index.js",
+  "type": "module",
   "scripts": {
-    "all": "npm run fmt && npm run build",
+    "all": "npm run fmt && npm run build && npm test",
     "build": "ncc build index.js --license licenses.txt",
-    "fmt": "prettier --write index.js package.json action.yml .github/dependabot.yml .github/workflows/*.yml",
-    "check": "prettier --check index.js package.json action.yml .github/dependabot.yml .github/workflows/*.yml"
+    "test": "node --test tests/*.test.js",
+    "fmt": "prettier --write index.js lib.js tests/*.js package.json action.yml .github/dependabot.yml .github/workflows/*.yml",
+    "check": "prettier --check index.js lib.js tests/*.js package.json action.yml .github/dependabot.yml .github/workflows/*.yml"
   },
   "repository": {
     "type": "git",
@@ -26,8 +28,7 @@
   },
   "homepage": "https://github.com/sv-tools/rust-metadata-action#readme",
   "dependencies": {
-    "@actions/core": "^3.0.1",
-    "@actions/github": "^9.1.1"
+    "@actions/core": "^3.0.1"
   },
   "devDependencies": {
     "@vercel/ncc": "^0.38.4",

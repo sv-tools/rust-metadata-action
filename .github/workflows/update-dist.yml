@@ -15,21 +15,33 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v5.5.0
-      - run: npm install
-      - run: npm run all
-      - name: Checking Git
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Open PR if dist/ changed
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          DELTA="$(git status --short)"
-          if [ -n "${DELTA}" ]
-          then
-            git config --global user.name 'SV Tools Bot'
-            git config --global user.email 'sv.go.tools@gmail.com'
-            git checkout -b update-dist
-            git add .
-            git commit -m "Update Dist"
-            git push origin update-dist
+          # Stage only dist/, ignore any incidental drift elsewhere.
+          if [ -z "$(git status --short dist/)" ]; then
+            echo "dist/ already up to date"
+            exit 0
           fi
+          git config --global user.name 'SV Tools Bot'
+          git config --global user.email 'sv.go.tools@gmail.com'
+          BRANCH="update-dist-${{ github.run_id }}"
+          git checkout -b "$BRANCH"
+          git add dist/
+          git commit -m "Update Dist"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "Update Dist" \
+            --body "Automated rebuild of dist/ via the Update Dist workflow." \
+            --head "$BRANCH" \
+            --base "${{ github.ref_name }}"

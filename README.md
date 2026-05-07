@@ -21,6 +21,9 @@ matrix).
 - `publish`: JSON array (string) of packages that can be published.
 - `matrix`: JSON array (string) of command-line fragments suitable for use as a job matrix, e.g.
   `["--package=foo","--package=bar --features=foo"]`
+- `rust-version`: Workspace MSRV — the highest `rust-version` declared by any package, compared numerically (so `1.10`
+  beats `1.9`). Empty string if no package declares one. Useful as input to `actions-rust-lang/setup-rust-toolchain`.
+- `edition`: The newest Rust edition used by any package (e.g. `2021`, `2024`). Empty string for an empty workspace.
 
 ## Examples
 
@@ -100,6 +103,15 @@ jobs:
 - The action expects a Rust workspace or package with a `Cargo.toml`. If your manifest lives in a subdirectory, set
   `manifest-path` accordingly.
 - Outputs are emitted as JSON strings; use `fromJson` in workflows when you need native arrays or objects.
+- If your project has a `rust-toolchain.toml` (or `rust-toolchain`) next to the manifest, the action installs the
+  pinned toolchain via `rustup toolchain install` before reading metadata. `rustup` is preinstalled on GitHub-hosted
+  runners; on self-hosted runners ensure it's on `PATH`.
+- Matrix output behavior:
+  - A package with no features yields one row: `--package=<name>`.
+  - A package with features yields one row per feature: `--package=<name> --features=<feature>` — there is no
+    additional bare `--package=<name>` row in this case. The intent is to drive `cargo {test,build}` per feature
+    rather than to also test "no features".
+  - `publish = false` packages still appear in `packages` but are excluded from `publish`.
 
 ## License
 

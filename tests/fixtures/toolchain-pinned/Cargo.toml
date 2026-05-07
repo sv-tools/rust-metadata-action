@@ -1,0 +1,9 @@
+[package]
+name = "toolchain-pinned"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "toolchain-pinned"
+path = "src/main.rs"
