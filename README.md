@@ -100,6 +100,15 @@ jobs:
 - The action expects a Rust workspace or package with a `Cargo.toml`. If your manifest lives in a subdirectory, set
   `manifest-path` accordingly.
 - Outputs are emitted as JSON strings; use `fromJson` in workflows when you need native arrays or objects.
+- If your project has a `rust-toolchain.toml` (or `rust-toolchain`) next to the manifest, the action installs the
+  pinned toolchain via `rustup toolchain install` before reading metadata. `rustup` is preinstalled on GitHub-hosted
+  runners; on self-hosted runners ensure it's on `PATH`.
+- Matrix output behavior:
+  - A package with no features yields one row: `--package=<name>`.
+  - A package with features yields one row per feature: `--package=<name> --features=<feature>` — there is no
+    additional bare `--package=<name>` row in this case. The intent is to drive `cargo {test,build}` per feature
+    rather than to also test "no features".
+  - `publish = false` packages still appear in `packages` but are excluded from `publish`.
 
 ## License
 
