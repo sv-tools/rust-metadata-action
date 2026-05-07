@@ -84,35 +84,76 @@ jobs:
         uses: ./
         continue-on-error: true
 
-  ToolchainPin:
-    # Regression test: project pins a specific toolchain in rust-toolchain.toml
-    # that may differ from the runner's default. Action must succeed.
+  Fixtures:
+    # Run the action against each in-tree fixture and assert exact outputs.
+    # Self-contained: no external repos, fast, and pins down expected
+    # behavior across every code path (publishable, private, workspace,
+    # rust-toolchain.toml).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v5.5.0
-      - name: Create a Rust project with a pinned toolchain
-        run: |
-          mkdir -p ./pinned/src
-          cat > ./pinned/Cargo.toml <<'EOF'
-          [package]
-          name = "pinned"
-          version = "0.0.1"
-          edition = "2021"
-          EOF
-          echo "fn main() {}" > ./pinned/src/main.rs
-          cat > ./pinned/rust-toolchain.toml <<'EOF'
-          [toolchain]
-          channel = "1.85.0"
-          profile = "minimal"
-          EOF
-      - id: pinned
+
+      - id: single-public
         uses: ./
         with:
-          manifest-path: "./pinned/Cargo.toml"
-      - name: Verify outputs
+          manifest-path: tests/fixtures/single-public/Cargo.toml
+      - name: Verify single-public outputs
+        env:
+          PACKAGES: ${{ steps.single-public.outputs.packages }}
+          PUBLISH: ${{ steps.single-public.outputs.publish }}
+          MATRIX: ${{ steps.single-public.outputs.matrix }}
         run: |
-          echo "Packages: ${{ steps.pinned.outputs.packages }}"
-          test '${{ steps.pinned.outputs.packages }}' = '["pinned"]'
+          [ "$PACKAGES" = '["single-public"]' ] || { echo "packages: $PACKAGES"; exit 1; }
+          [ "$PUBLISH" = '["single-public"]' ] || { echo "publish: $PUBLISH"; exit 1; }
+          [ "$MATRIX" = '["--package=single-public"]' ] || { echo "matrix: $MATRIX"; exit 1; }
+
+      - id: single-private
+        uses: ./
+        with:
+          manifest-path: tests/fixtures/single-private/Cargo.toml
+      - name: Verify single-private outputs
+        env:
+          PACKAGES: ${{ steps.single-private.outputs.packages }}
+          PUBLISH: ${{ steps.single-private.outputs.publish }}
+          MATRIX: ${{ steps.single-private.outputs.matrix }}
+        run: |
+          [ "$PACKAGES" = '["single-private"]' ] || { echo "packages: $PACKAGES"; exit 1; }
+          [ "$PUBLISH" = '[]' ] || { echo "publish: $PUBLISH"; exit 1; }
+          [ "$MATRIX" = '["--package=single-private"]' ] || { echo "matrix: $MATRIX"; exit 1; }
+
+      - id: workspace-mixed
+        uses: ./
+        with:
+          manifest-path: tests/fixtures/workspace-mixed/Cargo.toml
+      - name: Verify workspace-mixed outputs
+        env:
+          PACKAGES: ${{ steps.workspace-mixed.outputs.packages }}
+          PUBLISH: ${{ steps.workspace-mixed.outputs.publish }}
+          MATRIX: ${{ steps.workspace-mixed.outputs.matrix }}
+        # Compare as sets (sorted) — cargo metadata's package order follows
+        # workspace member declaration order, but feature order is alphabetical.
+        # Sorting both sides keeps the assertion stable across cargo versions.
+        run: |
+          jq -ne --argjson got "$PACKAGES" '$got | sort == ["app","feature-lib","private-lib"]' \
+            || { echo "packages: $PACKAGES"; exit 1; }
+          jq -ne --argjson got "$PUBLISH" '$got | sort == ["app","feature-lib"]' \
+            || { echo "publish: $PUBLISH"; exit 1; }
+          jq -ne --argjson got "$MATRIX" '$got | sort == ["--package=app","--package=feature-lib --features=bar","--package=feature-lib --features=default","--package=feature-lib --features=foo","--package=private-lib"]' \
+            || { echo "matrix: $MATRIX"; exit 1; }
+
+      - id: toolchain-pinned
+        uses: ./
+        with:
+          manifest-path: tests/fixtures/toolchain-pinned/Cargo.toml
+      - name: Verify toolchain-pinned outputs
+        env:
+          PACKAGES: ${{ steps.toolchain-pinned.outputs.packages }}
+        run: |
+          [ "$PACKAGES" = '["toolchain-pinned"]' ] || { echo "packages: $PACKAGES"; exit 1; }
+      - name: Verify pinned toolchain was actually installed
+        # Confirms ensureToolchain ran end-to-end. If a future regression
+        # silently skipped the install, this grep would fail.
+        run: rustup toolchain list | grep -E '^1\.85\.0'
 
   Roas:
     runs-on: ubuntu-latest
