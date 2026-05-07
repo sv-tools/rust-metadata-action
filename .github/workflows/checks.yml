@@ -21,8 +21,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v5.5.0
-      - run: npm install
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
       - run: npm run check
+      - run: npm test
+
+  Dist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v5.5.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Verify dist/ is up to date
+        run: |
+          if ! git diff --exit-code dist/; then
+            echo "::error::dist/ is out of date — run 'npm run build' and commit the result"
+            exit 1
+          fi
 
   Test:
     runs-on: ubuntu-latest
@@ -61,6 +83,36 @@ jobs:
       - name: Should fail
         uses: ./
         continue-on-error: true
+
+  ToolchainPin:
+    # Regression test: project pins a specific toolchain in rust-toolchain.toml
+    # that may differ from the runner's default. Action must succeed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v5.5.0
+      - name: Create a Rust project with a pinned toolchain
+        run: |
+          mkdir -p ./pinned/src
+          cat > ./pinned/Cargo.toml <<'EOF'
+          [package]
+          name = "pinned"
+          version = "0.0.1"
+          edition = "2021"
+          EOF
+          echo "fn main() {}" > ./pinned/src/main.rs
+          cat > ./pinned/rust-toolchain.toml <<'EOF'
+          [toolchain]
+          channel = "1.85.0"
+          profile = "minimal"
+          EOF
+      - id: pinned
+        uses: ./
+        with:
+          manifest-path: "./pinned/Cargo.toml"
+      - name: Verify outputs
+        run: |
+          echo "Packages: ${{ steps.pinned.outputs.packages }}"
+          test '${{ steps.pinned.outputs.packages }}' = '["pinned"]'
 
   Roas:
     runs-on: ubuntu-latest
