@@ -159,12 +159,16 @@ export function parseCargoInfoVersion(stdout) {
 // Run `cargo info <name>` and return the latest published version, or null
 // if the package isn't on the registry yet (first publish). Other failures
 // reject so callers can surface them.
+//
+// `--registry` is *always* passed, defaulting to the built-in `crates-io`
+// alias. Without it, `cargo info` first probes the workspace at `cwd` and
+// returns the *local* crate's version when the name happens to match a
+// workspace member — making `local == published` for every candidate and
+// silently emptying the publish output. With `--registry`, cargo skips the
+// local lookup and queries the named registry directly.
 export function getPublishedVersion(pkgName, cwd, registry) {
   return new Promise((resolve, reject) => {
-    const args = ["info", pkgName];
-    if (registry) {
-      args.push("--registry", registry);
-    }
+    const args = ["info", pkgName, "--registry", registry || "crates-io"];
     const cmd = spawn("cargo", args, { cwd });
 
     const stdoutChunks = [];

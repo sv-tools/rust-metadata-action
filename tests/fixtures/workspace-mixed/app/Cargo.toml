@@ -1,5 +1,9 @@
 [package]
-name = "app"
+# Prefixed with `rma-fixture-` so the name can't collide with a real crate
+# on crates.io. The new publish-output filter calls `cargo info <name>`,
+# and `app` is already published at 0.6.5 — without the prefix the fixture
+# would be filtered out as "older than registry".
+name = "rma-fixture-app"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
