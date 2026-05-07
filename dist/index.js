@@ -28065,10 +28065,25 @@ function isPublishable(pkg) {
   );
 }
 
+// Compare two `major.minor[.patch]` strings numerically (so "1.10" > "1.9",
+// not the lexicographic opposite). Missing components default to 0.
+function compareVersion(a, b) {
+  const parse = (v) => v.split(".").map((p) => parseInt(p, 10) || 0);
+  const av = parse(a);
+  const bv = parse(b);
+  for (let i = 0; i < 3; i++) {
+    const diff = (av[i] ?? 0) - (bv[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
 function parseMetadata(metadata) {
   const packages = [];
   const publish = [];
   const matrix = [];
+  let rustVersion = null;
+  let edition = null;
   for (const pkg of metadata.packages ?? []) {
     packages.push(pkg.name);
     if (isPublishable(pkg)) {
@@ -28082,16 +28097,42 @@ function parseMetadata(metadata) {
         matrix.push(`--package=${pkg.name} --features=${feature}`);
       }
     }
+    if (pkg.rust_version != null) {
+      if (
+        rustVersion === null ||
+        compareVersion(pkg.rust_version, rustVersion) > 0
+      ) {
+        rustVersion = pkg.rust_version;
+      }
+    }
+    if (pkg.edition != null) {
+      // Editions are years ("2015", "2018", "2021", "2024") — simple int compare.
+      if (
+        edition === null ||
+        parseInt(pkg.edition, 10) > parseInt(edition, 10)
+      ) {
+        edition = pkg.edition;
+      }
+    }
   }
-  return { packages, publish, matrix };
+  return {
+    packages,
+    publish,
+    matrix,
+    rustVersion: rustVersion ?? "",
+    edition: edition ?? "",
+  };
 }
 
 function writeOutputs(metadata) {
-  const { packages, publish, matrix } = parseMetadata(metadata);
+  const { packages, publish, matrix, rustVersion, edition } =
+    parseMetadata(metadata);
   (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("metadata", JSON.stringify(metadata));
   (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("packages", JSON.stringify(packages));
   (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("publish", JSON.stringify(publish));
   (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("matrix", JSON.stringify(matrix));
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("rust-version", rustVersion);
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("edition", edition);
 }
 
 async function run() {

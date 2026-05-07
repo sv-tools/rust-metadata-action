@@ -102,10 +102,14 @@ jobs:
           PACKAGES: ${{ steps.single-public.outputs.packages }}
           PUBLISH: ${{ steps.single-public.outputs.publish }}
           MATRIX: ${{ steps.single-public.outputs.matrix }}
+          RUST_VERSION: ${{ steps.single-public.outputs.rust-version }}
+          EDITION: ${{ steps.single-public.outputs.edition }}
         run: |
           [ "$PACKAGES" = '["single-public"]' ] || { echo "packages: $PACKAGES"; exit 1; }
           [ "$PUBLISH" = '["single-public"]' ] || { echo "publish: $PUBLISH"; exit 1; }
           [ "$MATRIX" = '["--package=single-public"]' ] || { echo "matrix: $MATRIX"; exit 1; }
+          [ "$RUST_VERSION" = '1.85' ] || { echo "rust-version: $RUST_VERSION"; exit 1; }
+          [ "$EDITION" = '2021' ] || { echo "edition: $EDITION"; exit 1; }
 
       - id: single-private
         uses: ./
@@ -116,10 +120,14 @@ jobs:
           PACKAGES: ${{ steps.single-private.outputs.packages }}
           PUBLISH: ${{ steps.single-private.outputs.publish }}
           MATRIX: ${{ steps.single-private.outputs.matrix }}
+          RUST_VERSION: ${{ steps.single-private.outputs.rust-version }}
+          EDITION: ${{ steps.single-private.outputs.edition }}
         run: |
           [ "$PACKAGES" = '["single-private"]' ] || { echo "packages: $PACKAGES"; exit 1; }
           [ "$PUBLISH" = '[]' ] || { echo "publish: $PUBLISH"; exit 1; }
           [ "$MATRIX" = '["--package=single-private"]' ] || { echo "matrix: $MATRIX"; exit 1; }
+          [ -z "$RUST_VERSION" ] || { echo "rust-version expected empty, got: $RUST_VERSION"; exit 1; }
+          [ "$EDITION" = '2021' ] || { echo "edition: $EDITION"; exit 1; }
 
       - id: workspace-mixed
         uses: ./
@@ -130,6 +138,8 @@ jobs:
           PACKAGES: ${{ steps.workspace-mixed.outputs.packages }}
           PUBLISH: ${{ steps.workspace-mixed.outputs.publish }}
           MATRIX: ${{ steps.workspace-mixed.outputs.matrix }}
+          RUST_VERSION: ${{ steps.workspace-mixed.outputs.rust-version }}
+          EDITION: ${{ steps.workspace-mixed.outputs.edition }}
         # Compare as sets (sorted) — cargo metadata's package order follows
         # workspace member declaration order, but feature order is alphabetical.
         # Sorting both sides keeps the assertion stable across cargo versions.
@@ -140,6 +150,9 @@ jobs:
             || { echo "publish: $PUBLISH"; exit 1; }
           jq -ne --argjson got "$MATRIX" '$got | sort == ["--package=app","--package=feature-lib --features=bar","--package=feature-lib --features=default","--package=feature-lib --features=foo","--package=private-lib"]' \
             || { echo "matrix: $MATRIX"; exit 1; }
+          # MSRV is max(1.85, 1.90) = 1.90; edition is max(2021, 2024) = 2024.
+          [ "$RUST_VERSION" = '1.90' ] || { echo "rust-version: $RUST_VERSION"; exit 1; }
+          [ "$EDITION" = '2024' ] || { echo "edition: $EDITION"; exit 1; }
 
       - id: toolchain-pinned
         uses: ./
@@ -148,8 +161,12 @@ jobs:
       - name: Verify toolchain-pinned outputs
         env:
           PACKAGES: ${{ steps.toolchain-pinned.outputs.packages }}
+          RUST_VERSION: ${{ steps.toolchain-pinned.outputs.rust-version }}
+          EDITION: ${{ steps.toolchain-pinned.outputs.edition }}
         run: |
           [ "$PACKAGES" = '["toolchain-pinned"]' ] || { echo "packages: $PACKAGES"; exit 1; }
+          [ -z "$RUST_VERSION" ] || { echo "rust-version expected empty, got: $RUST_VERSION"; exit 1; }
+          [ "$EDITION" = '2021' ] || { echo "edition: $EDITION"; exit 1; }
       - name: Verify pinned toolchain was actually installed
         # Confirms ensureToolchain ran end-to-end. If a future regression
         # silently skipped the install, this grep would fail.

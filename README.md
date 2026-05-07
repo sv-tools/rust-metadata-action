@@ -21,6 +21,9 @@ matrix).
 - `publish`: JSON array (string) of packages that can be published.
 - `matrix`: JSON array (string) of command-line fragments suitable for use as a job matrix, e.g.
   `["--package=foo","--package=bar --features=foo"]`
+- `rust-version`: Workspace MSRV — the highest `rust-version` declared by any package, compared numerically (so `1.10`
+  beats `1.9`). Empty string if no package declares one. Useful as input to `actions-rust-lang/setup-rust-toolchain`.
+- `edition`: The newest Rust edition used by any package (e.g. `2021`, `2024`). Empty string for an empty workspace.
 
 ## Examples
 

@@ -17,6 +17,10 @@ outputs:
     description: 'JSON-encoded array of package names that are publishable. Packages declared `publish = false` are excluded; packages restricted to specific registries are included. Example: `["foo","bar"]`.'
   matrix:
     description: 'JSON-encoded array of cargo argument strings — one entry per package, or one per feature for packages that declare features. Intended for `strategy.matrix`. Example: `["--package=foo","--package=bar --features=full"]`.'
+  rust-version:
+    description: "Workspace MSRV: the highest `rust-version` declared by any package, compared numerically (so `1.10` > `1.9`). Empty string if no package declares one. Useful for `actions-rust-lang/setup-rust-toolchain`."
+  edition:
+    description: "The newest Rust edition used by any package in the workspace (e.g. `2021`, `2024`). Empty string for an empty workspace."
 runs:
   using: node24
   main: "dist/index.js"
