@@ -27976,7 +27976,7 @@ __webpack_async_result__();
 /* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
 /* harmony export */   eF: () => (/* binding */ run)
 /* harmony export */ });
-/* unused harmony exports ensureToolchain, runCargoMetadata, parseMetadata, writeOutputs */
+/* unused harmony exports ensureToolchain, runCargoMetadata, compareSemver, parseCargoInfoVersion, getPublishedVersion, getMaxPublishedVersion, asyncPool, parseMetadata, filterPublishable, writeOutputs */
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(2698);
 /* harmony import */ var child_process__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(5317);
 /* harmony import */ var path__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(6928);
@@ -28086,16 +28086,183 @@ function compareVersion(a, b) {
   return 0;
 }
 
+// Full semver compare per https://semver.org §11. Returns negative if a < b,
+// 0 if equal in precedence, positive if a > b. Build metadata (`+...`) is
+// ignored; prerelease segments (`-...`) are compared per spec: numeric < non-
+// numeric, and a version with a prerelease is lower than the same without.
+function compareSemver(a, b) {
+  const stripBuild = (v) => v.split("+")[0];
+  const split = (v) => {
+    const s = stripBuild(v);
+    const i = s.indexOf("-");
+    return i === -1
+      ? { main: s, pre: null }
+      : { main: s.slice(0, i), pre: s.slice(i + 1) };
+  };
+  const sa = split(a);
+  const sb = split(b);
+  const parse = (m) => m.split(".").map((p) => parseInt(p, 10) || 0);
+  const av = parse(sa.main);
+  const bv = parse(sb.main);
+  for (let i = 0; i < 3; i++) {
+    const diff = (av[i] ?? 0) - (bv[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  if (sa.pre === null && sb.pre === null) return 0;
+  if (sa.pre === null) return 1;
+  if (sb.pre === null) return -1;
+  const ap = sa.pre.split(".");
+  const bp = sb.pre.split(".");
+  for (let i = 0; i < Math.max(ap.length, bp.length); i++) {
+    if (ap[i] === undefined) return -1;
+    if (bp[i] === undefined) return 1;
+    const aNum = /^\d+$/.test(ap[i]);
+    const bNum = /^\d+$/.test(bp[i]);
+    if (aNum && bNum) {
+      const d = parseInt(ap[i], 10) - parseInt(bp[i], 10);
+      if (d !== 0) return d;
+    } else if (aNum !== bNum) {
+      // Numeric identifiers always have lower precedence than alphanumeric.
+      return aNum ? -1 : 1;
+    } else {
+      const c = ap[i] < bp[i] ? -1 : ap[i] > bp[i] ? 1 : 0;
+      if (c !== 0) return c;
+    }
+  }
+  return 0;
+}
+
+// Pulls the published version from cargo info's stdout.
+function parseCargoInfoVersion(stdout) {
+  const m = stdout.match(/^version:\s*(\S+)/im);
+  return m ? m[1] : null;
+}
+
+// Run `cargo info <name>` and return the latest published version, or null
+// if the package isn't on the registry yet (first publish). Other failures
+// reject so callers can surface them.
+//
+// `--registry` is *always* passed, defaulting to the built-in `crates-io`
+// alias. Without it, `cargo info` first probes the workspace at `cwd` and
+// returns the *local* crate's version when the name happens to match a
+// workspace member — making `local == published` for every candidate and
+// silently emptying the publish output. With `--registry`, cargo skips the
+// local lookup and queries the named registry directly.
+//
+// A successful exit with no parseable `version:` line is treated as an
+// error, *not* as "first publish" — if cargo's output format ever drifts,
+// the caller's catch path will skip the candidate (safe default) instead
+// of mass-republishing every crate it can't parse.
+function getPublishedVersion(pkgName, cwd, registry) {
+  return new Promise((resolve, reject) => {
+    const args = ["info", pkgName, "--registry", registry || "crates-io"];
+    const cmd = (0,child_process__WEBPACK_IMPORTED_MODULE_1__.spawn)("cargo", args, { cwd });
+
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    cmd.stdout.on("data", (chunk) => stdoutChunks.push(chunk));
+    cmd.stderr.on("data", (chunk) => stderrChunks.push(chunk));
+
+    cmd.on("error", (error) => {
+      reject(new Error(`cargo info failed to spawn: ${error.message}`));
+    });
+
+    cmd.on("close", (code) => {
+      const stdout = Buffer.concat(stdoutChunks).toString();
+      const stderr = Buffer.concat(stderrChunks).toString();
+      if (code !== 0) {
+        if (/could not find/i.test(stderr)) {
+          resolve(null);
+          return;
+        }
+        reject(
+          new Error(
+            `cargo info ${pkgName} failed (exit code ${code})` +
+              (stderr.trim() ? `: ${stderr.trim()}` : ""),
+          ),
+        );
+        return;
+      }
+      const parsed = parseCargoInfoVersion(stdout);
+      if (parsed === null) {
+        reject(
+          new Error(
+            `cargo info ${pkgName} returned no parseable \`version:\` line`,
+          ),
+        );
+        return;
+      }
+      resolve(parsed);
+    });
+  });
+}
+
+// Query each registry in `registries` for the package's latest version and
+// return the highest one found (or null if no registry has the crate).
+//
+// `pkg.publish` in Cargo.toml may list multiple registries — the crate is
+// then publishable to any of them. We can't predict which the user will
+// `cargo publish --registry <X>` against, so the conservative answer is
+// "is it newer than every place it could land?". Taking the max and
+// requiring `local > max` prevents emitting a crate that would hit
+// "version already uploaded" on whichever registry the user actually
+// targets.
+async function getMaxPublishedVersion(name, cwd, registries) {
+  let max = null;
+  for (const registry of registries) {
+    const v = await getPublishedVersion(name, cwd, registry);
+    if (v === null) continue;
+    if (max === null || compareSemver(v, max) > 0) max = v;
+  }
+  return max;
+}
+
+// Run `worker(item)` over `items` with at most `limit` concurrent in-flight
+// calls. Preserves input order in the returned array.
+//
+// `cargo info` is cheap CPU-wise but spawns a process and hits the network
+// per call. In a 100-crate workspace, `Promise.all(...)` would launch 100
+// concurrent processes and 100 simultaneous registry requests, which can
+// overwhelm a small runner and trigger rate limits. A small pool keeps
+// resource use predictable while still giving real parallelism.
+async function asyncPool(limit, items, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runner = async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      results[i] = await worker(items[i]);
+    }
+  };
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: workerCount }, runner));
+  return results;
+}
+
 function parseMetadata(metadata) {
   const packages = [];
-  const publish = [];
+  const publishCandidates = [];
   const matrix = [];
   let rustVersion = null;
   let edition = null;
   for (const pkg of metadata.packages ?? []) {
     packages.push(pkg.name);
     if (isPublishable(pkg)) {
-      publish.push(pkg.name);
+      // `publish = ["a", "b", ...]` declares every registry the crate may
+      // be published to. We need to query *all* of them and compare against
+      // the highest version found, since the user picks the target with
+      // `cargo publish --registry <X>` at publish time. `publish = null`
+      // means unrestricted → just the default (`crates-io`).
+      const registries =
+        Array.isArray(pkg.publish) && pkg.publish.length > 0
+          ? [...pkg.publish]
+          : [null];
+      publishCandidates.push({
+        name: pkg.name,
+        version: pkg.version,
+        registries,
+      });
     }
     // Sort so matrix output is stable regardless of cargo's feature
     // emission order (currently a BTreeMap, but not contractually so).
@@ -28127,16 +28294,53 @@ function parseMetadata(metadata) {
   }
   return {
     packages,
-    publish,
+    publishCandidates,
     matrix,
     rustVersion: rustVersion ?? "",
     edition: edition ?? "",
   };
 }
 
-function writeOutputs(metadata) {
-  const { packages, publish, matrix, rustVersion, edition } =
+// Cap on concurrent `cargo info` invocations. Empirically, ~4 saturates a
+// GitHub-hosted runner without triggering registry rate limits.
+const PUBLISH_CHECK_CONCURRENCY = 4;
+
+// Filter publish candidates down to those whose local version is strictly
+// newer than the registry version. Packages that aren't on any of their
+// declared registries are kept (first publish). Network/parse failures are
+// surfaced as warnings and the candidate is skipped, so a transient outage
+// can't accidentally republish an already-published crate.
+async function filterPublishable(candidates, cwd) {
+  const resolved = await asyncPool(
+    PUBLISH_CHECK_CONCURRENCY,
+    candidates,
+    async ({ name, version, registries }) => {
+      let published;
+      try {
+        published = await getMaxPublishedVersion(name, cwd, registries);
+      } catch (err) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .warning */ .$e)(`${name}: cargo info failed (${err.message}); skipping`);
+        return null;
+      }
+      if (published === null) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .info */ .pq)(`${name}: not on registry — including for first publish`);
+        return name;
+      }
+      if (compareSemver(version, published) > 0) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .info */ .pq)(`${name}: ${published} → ${version} (publishable)`);
+        return name;
+      }
+      (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .info */ .pq)(`${name}: ${version} <= published ${published} (skipping)`);
+      return null;
+    },
+  );
+  return resolved.filter((name) => name !== null);
+}
+
+async function writeOutputs(metadata, cwd) {
+  const { packages, publishCandidates, matrix, rustVersion, edition } =
     parseMetadata(metadata);
+  const publish = await filterPublishable(publishCandidates, cwd);
   (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("metadata", JSON.stringify(metadata));
   (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("packages", JSON.stringify(packages));
   (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("publish", JSON.stringify(publish));
@@ -28149,7 +28353,8 @@ async function run() {
   const manifestPath = (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .getInput */ .V4)("manifest-path");
   ensureToolchain(manifestPath);
   const metadata = await runCargoMetadata(manifestPath);
-  writeOutputs(metadata);
+  const cwd = (0,path__WEBPACK_IMPORTED_MODULE_2__.dirname)((0,path__WEBPACK_IMPORTED_MODULE_2__.resolve)(manifestPath));
+  await writeOutputs(metadata, cwd);
 }
 
 
@@ -28164,10 +28369,11 @@ __nccwpck_require__.d(__webpack_exports__, {
   V4: () => (/* binding */ getInput),
   pq: () => (/* binding */ info),
   C1: () => (/* binding */ setFailed),
-  uH: () => (/* binding */ setOutput)
+  uH: () => (/* binding */ setOutput),
+  $e: () => (/* binding */ warning)
 });
 
-// UNUSED EXPORTS: ExitCode, addPath, debug, endGroup, error, exportVariable, getBooleanInput, getIDToken, getMultilineInput, getState, group, isDebug, markdownSummary, notice, platform, saveState, setCommandEcho, setSecret, startGroup, summary, toPlatformPath, toPosixPath, toWin32Path, warning
+// UNUSED EXPORTS: ExitCode, addPath, debug, endGroup, error, exportVariable, getBooleanInput, getIDToken, getMultilineInput, getState, group, isDebug, markdownSummary, notice, platform, saveState, setCommandEcho, setSecret, startGroup, summary, toPlatformPath, toPosixPath, toWin32Path
 
 ;// CONCATENATED MODULE: external "os"
 const external_os_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("os");
@@ -31012,7 +31218,7 @@ function error(message, properties = {}) {
  * @param properties optional properties to add to the annotation.
  */
 function warning(message, properties = {}) {
-    issueCommand('warning', toCommandProperties(properties), message instanceof Error ? message.toString() : message);
+    command_issueCommand('warning', utils_toCommandProperties(properties), message instanceof Error ? message.toString() : message);
 }
 /**
  * Adds a notice issue

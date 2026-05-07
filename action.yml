@@ -14,7 +14,7 @@ outputs:
   packages:
     description: 'JSON-encoded array of every package name in the workspace. Example: `["foo","bar"]`.'
   publish:
-    description: 'JSON-encoded array of package names that are publishable. Packages declared `publish = false` are excluded; packages restricted to specific registries are included. Example: `["foo","bar"]`.'
+    description: 'JSON-encoded array of package names that need to be published — i.e. their local `version` is strictly newer than what is on the registry. The action runs `cargo info` for each publishable candidate and compares versions per semver. Packages declared `publish = false` are always excluded; packages not yet on the registry are included (first publish); packages whose registry version is equal or newer are skipped. Packages restricted to a specific registry via `publish = ["my-registry"]` are queried against that registry. Example: `["foo","bar"]`.'
   matrix:
     description: 'JSON-encoded array of cargo argument strings — one entry per package, or one per feature for packages that declare features. Intended for `strategy.matrix`. Example: `["--package=foo","--package=bar --features=full"]`.'
   rust-version:

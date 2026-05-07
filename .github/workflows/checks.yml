@@ -140,11 +140,11 @@ jobs:
         # workspace member declaration order, but feature order is alphabetical.
         # Sorting both sides keeps the assertion stable across cargo versions.
         run: |
-          jq -ne --argjson got "$PACKAGES" '$got | sort == ["app","feature-lib","private-lib"]' \
+          jq -ne --argjson got "$PACKAGES" '$got | sort == ["feature-lib","private-lib","rma-fixture-app"]' \
             || { echo "packages: $PACKAGES"; exit 1; }
-          jq -ne --argjson got "$PUBLISH" '$got | sort == ["app","feature-lib"]' \
+          jq -ne --argjson got "$PUBLISH" '$got | sort == ["feature-lib","rma-fixture-app"]' \
             || { echo "publish: $PUBLISH"; exit 1; }
-          jq -ne --argjson got "$MATRIX" '$got | sort == ["--package=app","--package=feature-lib --features=bar","--package=feature-lib --features=default","--package=feature-lib --features=foo","--package=private-lib"]' \
+          jq -ne --argjson got "$MATRIX" '$got | sort == ["--package=feature-lib --features=bar","--package=feature-lib --features=default","--package=feature-lib --features=foo","--package=private-lib","--package=rma-fixture-app"]' \
             || { echo "matrix: $MATRIX"; exit 1; }
           [ "$RUST_VERSION" = '1.90' ] || { echo "rust-version: $RUST_VERSION"; exit 1; }
           [ "$EDITION" = '2024' ] || { echo "edition: $EDITION"; exit 1; }
