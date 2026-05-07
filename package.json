@@ -1,6 +1,6 @@
 {
   "name": "rust-metadata-action",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "GitHub action to retrieve metadata, including crates, features, and other relevant information of the Rust project",
   "keywords": [
     "GitHub",
