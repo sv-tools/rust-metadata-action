@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compareSemver, parseCargoInfoVersion, parseMetadata } from "../lib.js";
+import {
+  asyncPool,
+  compareSemver,
+  parseCargoInfoVersion,
+  parseMetadata,
+} from "../lib.js";
 
 const baselinePkg = {
   name: "ignored",
@@ -80,7 +85,7 @@ test("publish=null is a publish candidate against the default registry", () => {
     ],
   });
   assert.deepEqual(out.publishCandidates, [
-    { name: "foo", version: "1.2.3", registry: null },
+    { name: "foo", version: "1.2.3", registries: [null] },
   ]);
 });
 
@@ -103,7 +108,30 @@ test("publish=['registry'] (restricted) is a candidate scoped to that registry",
     ],
   });
   assert.deepEqual(out.publishCandidates, [
-    { name: "foo", version: "0.5.0", registry: "my-registry" },
+    { name: "foo", version: "0.5.0", registries: ["my-registry"] },
+  ]);
+});
+
+test("publish=['a','b'] preserves the full registry list", () => {
+  // We can't predict which registry the user will `cargo publish --registry`
+  // against, so the full list flows through and filterPublishable queries
+  // each one (and uses the max version found).
+  const out = parseMetadata({
+    packages: [
+      {
+        ...baselinePkg,
+        name: "foo",
+        publish: ["registry-a", "registry-b"],
+        version: "0.5.0",
+      },
+    ],
+  });
+  assert.deepEqual(out.publishCandidates, [
+    {
+      name: "foo",
+      version: "0.5.0",
+      registries: ["registry-a", "registry-b"],
+    },
   ]);
 });
 
@@ -122,8 +150,8 @@ test("packages output always contains every package, regardless of publish", () 
   });
   assert.deepEqual(out.packages, ["a", "b", "c"]);
   assert.deepEqual(out.publishCandidates, [
-    { name: "a", version: "1.0.0", registry: null },
-    { name: "c", version: "1.0.0", registry: "my-registry" },
+    { name: "a", version: "1.0.0", registries: [null] },
+    { name: "c", version: "1.0.0", registries: ["my-registry"] },
   ]);
 });
 
@@ -241,4 +269,37 @@ test("parseCargoInfoVersion returns null when no version line is present", () =>
 
 test("parseCargoInfoVersion is case-insensitive on the key", () => {
   assert.equal(parseCargoInfoVersion("Version: 0.1.0\n"), "0.1.0");
+});
+
+test("asyncPool preserves input order", async () => {
+  // Reverse-correlate delay with index so a naive implementation that
+  // assigned results in completion order would scramble the output.
+  const items = [0, 1, 2, 3, 4];
+  const out = await asyncPool(2, items, async (i) => {
+    await new Promise((r) => setTimeout(r, (items.length - i) * 5));
+    return i * 10;
+  });
+  assert.deepEqual(out, [0, 10, 20, 30, 40]);
+});
+
+test("asyncPool caps in-flight workers at the limit", async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const items = Array.from({ length: 10 }, (_, i) => i);
+  await asyncPool(3, items, async () => {
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    await new Promise((r) => setTimeout(r, 5));
+    inFlight--;
+  });
+  assert.ok(peak <= 3, `peak in-flight was ${peak}, expected ≤ 3`);
+});
+
+test("asyncPool handles empty input without spawning workers", async () => {
+  let calls = 0;
+  const out = await asyncPool(4, [], async () => {
+    calls++;
+  });
+  assert.deepEqual(out, []);
+  assert.equal(calls, 0);
 });

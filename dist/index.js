@@ -27976,7 +27976,7 @@ __webpack_async_result__();
 /* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
 /* harmony export */   eF: () => (/* binding */ run)
 /* harmony export */ });
-/* unused harmony exports ensureToolchain, runCargoMetadata, compareSemver, parseCargoInfoVersion, getPublishedVersion, parseMetadata, filterPublishable, writeOutputs */
+/* unused harmony exports ensureToolchain, runCargoMetadata, compareSemver, parseCargoInfoVersion, getPublishedVersion, getMaxPublishedVersion, asyncPool, parseMetadata, filterPublishable, writeOutputs */
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(2698);
 /* harmony import */ var child_process__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(5317);
 /* harmony import */ var path__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(6928);
@@ -28148,6 +28148,11 @@ function parseCargoInfoVersion(stdout) {
 // workspace member — making `local == published` for every candidate and
 // silently emptying the publish output. With `--registry`, cargo skips the
 // local lookup and queries the named registry directly.
+//
+// A successful exit with no parseable `version:` line is treated as an
+// error, *not* as "first publish" — if cargo's output format ever drifts,
+// the caller's catch path will skip the candidate (safe default) instead
+// of mass-republishing every crate it can't parse.
 function getPublishedVersion(pkgName, cwd, registry) {
   return new Promise((resolve, reject) => {
     const args = ["info", pkgName, "--registry", registry || "crates-io"];
@@ -28178,9 +28183,61 @@ function getPublishedVersion(pkgName, cwd, registry) {
         );
         return;
       }
-      resolve(parseCargoInfoVersion(stdout));
+      const parsed = parseCargoInfoVersion(stdout);
+      if (parsed === null) {
+        reject(
+          new Error(
+            `cargo info ${pkgName} returned no parseable \`version:\` line`,
+          ),
+        );
+        return;
+      }
+      resolve(parsed);
     });
   });
+}
+
+// Query each registry in `registries` for the package's latest version and
+// return the highest one found (or null if no registry has the crate).
+//
+// `pkg.publish` in Cargo.toml may list multiple registries — the crate is
+// then publishable to any of them. We can't predict which the user will
+// `cargo publish --registry <X>` against, so the conservative answer is
+// "is it newer than every place it could land?". Taking the max and
+// requiring `local > max` prevents emitting a crate that would hit
+// "version already uploaded" on whichever registry the user actually
+// targets.
+async function getMaxPublishedVersion(name, cwd, registries) {
+  let max = null;
+  for (const registry of registries) {
+    const v = await getPublishedVersion(name, cwd, registry);
+    if (v === null) continue;
+    if (max === null || compareSemver(v, max) > 0) max = v;
+  }
+  return max;
+}
+
+// Run `worker(item)` over `items` with at most `limit` concurrent in-flight
+// calls. Preserves input order in the returned array.
+//
+// `cargo info` is cheap CPU-wise but spawns a process and hits the network
+// per call. In a 100-crate workspace, `Promise.all(...)` would launch 100
+// concurrent processes and 100 simultaneous registry requests, which can
+// overwhelm a small runner and trigger rate limits. A small pool keeps
+// resource use predictable while still giving real parallelism.
+async function asyncPool(limit, items, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runner = async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      results[i] = await worker(items[i], i);
+    }
+  };
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: workerCount }, runner));
+  return results;
 }
 
 function parseMetadata(metadata) {
@@ -28192,17 +28249,19 @@ function parseMetadata(metadata) {
   for (const pkg of metadata.packages ?? []) {
     packages.push(pkg.name);
     if (isPublishable(pkg)) {
-      // `publish = ["my-registry", ...]` restricts where the crate may go;
-      // pick the first entry as the registry to query. `publish = null`
-      // (unrestricted) maps to the default registry, so leave it unset.
-      const registry =
+      // `publish = ["a", "b", ...]` declares every registry the crate may
+      // be published to. We need to query *all* of them and compare against
+      // the highest version found, since the user picks the target with
+      // `cargo publish --registry <X>` at publish time. `publish = null`
+      // means unrestricted → just the default (`crates-io`).
+      const registries =
         Array.isArray(pkg.publish) && pkg.publish.length > 0
-          ? pkg.publish[0]
-          : null;
+          ? [...pkg.publish]
+          : [null];
       publishCandidates.push({
         name: pkg.name,
         version: pkg.version,
-        registry,
+        registries,
       });
     }
     // Sort so matrix output is stable regardless of cargo's feature
@@ -28242,32 +28301,39 @@ function parseMetadata(metadata) {
   };
 }
 
+// Cap on concurrent `cargo info` invocations. Empirically, ~4 saturates a
+// GitHub-hosted runner without triggering registry rate limits.
+const PUBLISH_CHECK_CONCURRENCY = 4;
+
 // Filter publish candidates down to those whose local version is strictly
-// newer than the registry version. Packages that aren't on the registry yet
-// are kept (first publish). Network/parse failures are surfaced as warnings
-// and the candidate is skipped, so a transient outage can't accidentally
-// republish an already-published crate.
+// newer than the registry version. Packages that aren't on any of their
+// declared registries are kept (first publish). Network/parse failures are
+// surfaced as warnings and the candidate is skipped, so a transient outage
+// can't accidentally republish an already-published crate.
 async function filterPublishable(candidates, cwd) {
-  const checks = candidates.map(async ({ name, version, registry }) => {
-    let published;
-    try {
-      published = await getPublishedVersion(name, cwd, registry);
-    } catch (err) {
-      (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .warning */ .$e)(`${name}: cargo info failed (${err.message}); skipping`);
+  const resolved = await asyncPool(
+    PUBLISH_CHECK_CONCURRENCY,
+    candidates,
+    async ({ name, version, registries }) => {
+      let published;
+      try {
+        published = await getMaxPublishedVersion(name, cwd, registries);
+      } catch (err) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .warning */ .$e)(`${name}: cargo info failed (${err.message}); skipping`);
+        return null;
+      }
+      if (published === null) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .info */ .pq)(`${name}: not on registry — including for first publish`);
+        return name;
+      }
+      if (compareSemver(version, published) > 0) {
+        (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .info */ .pq)(`${name}: ${published} → ${version} (publishable)`);
+        return name;
+      }
+      (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .info */ .pq)(`${name}: ${version} <= published ${published} (skipping)`);
       return null;
-    }
-    if (published === null) {
-      (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .info */ .pq)(`${name}: not on registry — including for first publish`);
-      return name;
-    }
-    if (compareSemver(version, published) > 0) {
-      (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .info */ .pq)(`${name}: ${published} → ${version} (publishable)`);
-      return name;
-    }
-    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .info */ .pq)(`${name}: ${version} <= published ${published} (skipping)`);
-    return null;
-  });
-  const resolved = await Promise.all(checks);
+    },
+  );
   return resolved.filter((name) => name !== null);
 }
 
