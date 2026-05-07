@@ -18,7 +18,7 @@ matrix).
 
 - `metadata`: Raw cargo metadata JSON.
 - `packages`: JSON array (string) of package names, e.g. `["foo","bar"]`.
-- `publish`: JSON array (string) of packages that can be published.
+- `publish`: JSON array (string) of packages whose local `version` is strictly newer than the version on the registry — i.e. the set that actually needs to be published. The action runs `cargo info` for each publishable candidate and compares versions per semver. Packages declared `publish = false` are always excluded; packages not yet on the registry are included (first publish); packages restricted to a private registry via `publish = ["my-registry"]` are queried against that registry.
 - `matrix`: JSON array (string) of command-line fragments suitable for use as a job matrix, e.g.
   `["--package=foo","--package=bar --features=foo"]`
 - `rust-version`: Workspace MSRV — the highest `rust-version` declared by any package, compared numerically (so `1.10`
@@ -112,6 +112,10 @@ jobs:
     additional bare `--package=<name>` row in this case. The intent is to drive `cargo {test,build}` per feature
     rather than to also test "no features".
   - `publish = false` packages still appear in `packages` but are excluded from `publish`.
+- `publish` filtering:
+  - Each publishable candidate is checked with `cargo info`. Only packages whose Cargo.toml `version` is strictly greater than the latest on the registry are emitted.
+  - Crates not yet on the registry (cargo info reports "could not find …") are included so a first-time publish goes through.
+  - If `cargo info` fails for any other reason (network, registry outage), that candidate is logged as a warning and skipped — the action errs on the side of *not* republishing rather than spuriously emitting a stale package.
 
 ## License
 

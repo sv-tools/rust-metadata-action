@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseMetadata } from "../lib.js";
+import { compareSemver, parseCargoInfoVersion, parseMetadata } from "../lib.js";
 
 const baselinePkg = {
   name: "ignored",
+  version: "0.1.0",
   publish: null,
   features: {},
 };
@@ -12,7 +13,7 @@ test("empty workspace yields empty arrays", () => {
   const out = parseMetadata({ packages: [] });
   assert.deepEqual(out, {
     packages: [],
-    publish: [],
+    publishCandidates: [],
     matrix: [],
     rustVersion: "",
     edition: "",
@@ -23,7 +24,7 @@ test("missing packages key yields empty arrays", () => {
   const out = parseMetadata({});
   assert.deepEqual(out, {
     packages: [],
-    publish: [],
+    publishCandidates: [],
     matrix: [],
     rustVersion: "",
     edition: "",
@@ -72,37 +73,58 @@ test("matrix entries are sorted alphabetically by feature name", () => {
   ]);
 });
 
-test("publish=null is publishable", () => {
+test("publish=null is a publish candidate against the default registry", () => {
   const out = parseMetadata({
-    packages: [{ ...baselinePkg, name: "foo", publish: null }],
+    packages: [
+      { ...baselinePkg, name: "foo", publish: null, version: "1.2.3" },
+    ],
   });
-  assert.deepEqual(out.publish, ["foo"]);
+  assert.deepEqual(out.publishCandidates, [
+    { name: "foo", version: "1.2.3", registry: null },
+  ]);
 });
 
-test("publish=[] (i.e. publish = false in Cargo.toml) is NOT publishable", () => {
+test("publish=[] (i.e. publish = false in Cargo.toml) is NOT a candidate", () => {
   const out = parseMetadata({
     packages: [{ ...baselinePkg, name: "foo", publish: [] }],
   });
-  assert.deepEqual(out.publish, []);
+  assert.deepEqual(out.publishCandidates, []);
 });
 
-test("publish=['registry'] (restricted) is still publishable", () => {
+test("publish=['registry'] (restricted) is a candidate scoped to that registry", () => {
   const out = parseMetadata({
-    packages: [{ ...baselinePkg, name: "foo", publish: ["my-registry"] }],
+    packages: [
+      {
+        ...baselinePkg,
+        name: "foo",
+        publish: ["my-registry"],
+        version: "0.5.0",
+      },
+    ],
   });
-  assert.deepEqual(out.publish, ["foo"]);
+  assert.deepEqual(out.publishCandidates, [
+    { name: "foo", version: "0.5.0", registry: "my-registry" },
+  ]);
 });
 
 test("packages output always contains every package, regardless of publish", () => {
   const out = parseMetadata({
     packages: [
-      { ...baselinePkg, name: "a", publish: null },
-      { ...baselinePkg, name: "b", publish: [] },
-      { ...baselinePkg, name: "c", publish: ["my-registry"] },
+      { ...baselinePkg, name: "a", publish: null, version: "1.0.0" },
+      { ...baselinePkg, name: "b", publish: [], version: "1.0.0" },
+      {
+        ...baselinePkg,
+        name: "c",
+        publish: ["my-registry"],
+        version: "1.0.0",
+      },
     ],
   });
   assert.deepEqual(out.packages, ["a", "b", "c"]);
-  assert.deepEqual(out.publish, ["a", "c"]);
+  assert.deepEqual(out.publishCandidates, [
+    { name: "a", version: "1.0.0", registry: null },
+    { name: "c", version: "1.0.0", registry: "my-registry" },
+  ]);
 });
 
 test("rust-version is empty string when no package declares one", () => {
@@ -157,4 +179,66 @@ test("edition returns the max across packages", () => {
 test("edition is empty string for empty workspace", () => {
   const out = parseMetadata({ packages: [] });
   assert.equal(out.edition, "");
+});
+
+test("compareSemver: equal versions return 0", () => {
+  assert.equal(compareSemver("1.2.3", "1.2.3"), 0);
+});
+
+test("compareSemver: patch-level bump is greater", () => {
+  assert.ok(compareSemver("1.2.4", "1.2.3") > 0);
+  assert.ok(compareSemver("1.2.3", "1.2.4") < 0);
+});
+
+test("compareSemver: minor bump beats patch", () => {
+  assert.ok(compareSemver("1.3.0", "1.2.99") > 0);
+});
+
+test("compareSemver: numeric (not lexical) compare on each component", () => {
+  assert.ok(compareSemver("1.10.0", "1.9.0") > 0);
+});
+
+test("compareSemver: missing patch defaults to 0", () => {
+  assert.equal(compareSemver("1.2", "1.2.0"), 0);
+});
+
+test("compareSemver: prerelease is lower than the same release", () => {
+  assert.ok(compareSemver("1.2.3-rc.1", "1.2.3") < 0);
+  assert.ok(compareSemver("1.2.3", "1.2.3-rc.1") > 0);
+});
+
+test("compareSemver: numeric prerelease segments compare numerically", () => {
+  assert.ok(compareSemver("1.0.0-alpha.10", "1.0.0-alpha.2") > 0);
+});
+
+test("compareSemver: numeric prerelease segment ranks below alphanumeric", () => {
+  assert.ok(compareSemver("1.0.0-alpha.1", "1.0.0-alpha.beta") < 0);
+});
+
+test("compareSemver: longer prerelease wins when prefix is equal (per semver §11)", () => {
+  assert.ok(compareSemver("1.0.0-alpha.1", "1.0.0-alpha") > 0);
+});
+
+test("compareSemver: build metadata is ignored", () => {
+  assert.equal(compareSemver("1.2.3+build.5", "1.2.3+build.9"), 0);
+});
+
+test("parseCargoInfoVersion picks up the canonical version line", () => {
+  const stdout = [
+    "    Updating crates.io index",
+    "serde #serialization",
+    "A generic serialization/deserialization framework",
+    "version: 1.0.228",
+    "license: MIT OR Apache-2.0",
+    "",
+  ].join("\n");
+  assert.equal(parseCargoInfoVersion(stdout), "1.0.228");
+});
+
+test("parseCargoInfoVersion returns null when no version line is present", () => {
+  assert.equal(parseCargoInfoVersion("just some unrelated text\n"), null);
+});
+
+test("parseCargoInfoVersion is case-insensitive on the key", () => {
+  assert.equal(parseCargoInfoVersion("Version: 0.1.0\n"), "0.1.0");
 });
