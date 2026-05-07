@@ -250,7 +250,7 @@ export async function asyncPool(limit, items, worker) {
     while (true) {
       const i = cursor++;
       if (i >= items.length) return;
-      results[i] = await worker(items[i], i);
+      results[i] = await worker(items[i]);
     }
   };
   const workerCount = Math.max(1, Math.min(limit, items.length));
