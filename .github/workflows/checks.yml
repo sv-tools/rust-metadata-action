@@ -85,10 +85,6 @@ jobs:
         continue-on-error: true
 
   Fixtures:
-    # Run the action against each in-tree fixture and assert exact outputs.
-    # Self-contained: no external repos, fast, and pins down expected
-    # behavior across every code path (publishable, private, workspace,
-    # rust-toolchain.toml).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v5.5.0
@@ -150,7 +146,6 @@ jobs:
             || { echo "publish: $PUBLISH"; exit 1; }
           jq -ne --argjson got "$MATRIX" '$got | sort == ["--package=app","--package=feature-lib --features=bar","--package=feature-lib --features=default","--package=feature-lib --features=foo","--package=private-lib"]' \
             || { echo "matrix: $MATRIX"; exit 1; }
-          # MSRV is max(1.85, 1.90) = 1.90; edition is max(2021, 2024) = 2024.
           [ "$RUST_VERSION" = '1.90' ] || { echo "rust-version: $RUST_VERSION"; exit 1; }
           [ "$EDITION" = '2024' ] || { echo "edition: $EDITION"; exit 1; }
 

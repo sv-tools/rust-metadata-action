@@ -27985,11 +27985,9 @@ __webpack_async_result__();
 
 
 function ensureToolchain(manifestPath) {
-  // rustup 1.28+ no longer auto-installs the toolchain pinned in
-  // rust-toolchain.toml when the cargo/rustc proxy is invoked. Running
-  // `rustup toolchain install` with no toolchain argument installs the
-  // *active* toolchain (i.e. whatever rust-toolchain.toml in the manifest's
-  // directory selects), without compiling anything.
+  // rustup 1.28+ no longer auto-installs through the cargo/rustc proxy.
+  // `rustup toolchain install` with no toolchain arg installs the active
+  // toolchain (whatever rust-toolchain.toml selects), without compiling.
   const cwd = (0,path__WEBPACK_IMPORTED_MODULE_2__.dirname)((0,path__WEBPACK_IMPORTED_MODULE_2__.resolve)(manifestPath));
   const result = (0,child_process__WEBPACK_IMPORTED_MODULE_1__.spawnSync)(
     "rustup",

@@ -105,7 +105,6 @@ test("rust-version returns the max across packages", () => {
 });
 
 test("rust-version compares numerically, not lexicographically", () => {
-  // Lexicographic compare would pick "1.9" over "1.10".
   const out = parseMetadata({
     packages: [
       { ...baselinePkg, name: "a", rust_version: "1.9" },

@@ -3,11 +3,9 @@ import { spawn, spawnSync } from "child_process";
 import { dirname, resolve as resolvePath } from "path";
 
 export function ensureToolchain(manifestPath) {
-  // rustup 1.28+ no longer auto-installs the toolchain pinned in
-  // rust-toolchain.toml when the cargo/rustc proxy is invoked. Running
-  // `rustup toolchain install` with no toolchain argument installs the
-  // *active* toolchain (i.e. whatever rust-toolchain.toml in the manifest's
-  // directory selects), without compiling anything.
+  // rustup 1.28+ no longer auto-installs through the cargo/rustc proxy.
+  // `rustup toolchain install` with no toolchain arg installs the active
+  // toolchain (whatever rust-toolchain.toml selects), without compiling.
   const cwd = dirname(resolvePath(manifestPath));
   const result = spawnSync(
     "rustup",
