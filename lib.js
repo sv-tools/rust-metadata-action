@@ -26,14 +26,24 @@ export function ensureToolchain(manifestPath) {
 }
 
 export function runCargoMetadata(manifestPath) {
+  // Spawn cargo from the manifest's directory so rustup picks up any
+  // adjacent rust-toolchain.toml (rustup walks up, not down). Pass the
+  // absolute manifest path so a relative input doesn't get re-resolved
+  // against the new cwd.
+  const absManifestPath = resolvePath(manifestPath);
+  const cwd = dirname(absManifestPath);
   return new Promise((resolve, reject) => {
-    const cmd = spawn("cargo", [
-      "metadata",
-      "--manifest-path=" + manifestPath,
-      "--no-deps",
-      "--format-version",
-      "1",
-    ]);
+    const cmd = spawn(
+      "cargo",
+      [
+        "metadata",
+        "--manifest-path=" + absManifestPath,
+        "--no-deps",
+        "--format-version",
+        "1",
+      ],
+      { cwd },
+    );
 
     const stdoutChunks = [];
     const stderrChunks = [];
@@ -105,7 +115,9 @@ export function parseMetadata(metadata) {
     if (isPublishable(pkg)) {
       publish.push(pkg.name);
     }
-    const features = Object.keys(pkg.features ?? {});
+    // Sort so matrix output is stable regardless of cargo's feature
+    // emission order (currently a BTreeMap, but not contractually so).
+    const features = Object.keys(pkg.features ?? {}).sort();
     if (features.length === 0) {
       matrix.push(`--package=${pkg.name}`);
     } else {
@@ -152,7 +164,7 @@ export function writeOutputs(metadata) {
 }
 
 export async function run() {
-  const manifestPath = getInput("manifest-path", { required: true });
+  const manifestPath = getInput("manifest-path");
   ensureToolchain(manifestPath);
   const metadata = await runCargoMetadata(manifestPath);
   writeOutputs(metadata);

@@ -23,12 +23,13 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - run: npm run all
+      - run: npm run build
       - name: Open PR if dist/ changed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -z "$(git status --short)" ]; then
+          # Stage only dist/, ignore any incidental drift elsewhere.
+          if [ -z "$(git status --short dist/)" ]; then
             echo "dist/ already up to date"
             exit 0
           fi
@@ -36,7 +37,7 @@ jobs:
           git config --global user.email 'sv.go.tools@gmail.com'
           BRANCH="update-dist-${{ github.run_id }}"
           git checkout -b "$BRANCH"
-          git add .
+          git add dist/
           git commit -m "Update Dist"
           git push origin "$BRANCH"
           gh pr create \

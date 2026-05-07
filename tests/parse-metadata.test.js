@@ -53,6 +53,25 @@ test("each feature produces its own matrix entry", () => {
   ]);
 });
 
+test("matrix entries are sorted alphabetically by feature name", () => {
+  // Deliberate reverse-alphabetical insertion order so we'd notice if
+  // sorting were dropped (JS preserves Object insertion order).
+  const out = parseMetadata({
+    packages: [
+      {
+        ...baselinePkg,
+        name: "foo",
+        features: { zebra: [], mango: [], apple: [] },
+      },
+    ],
+  });
+  assert.deepEqual(out.matrix, [
+    "--package=foo --features=apple",
+    "--package=foo --features=mango",
+    "--package=foo --features=zebra",
+  ]);
+});
+
 test("publish=null is publishable", () => {
   const out = parseMetadata({
     packages: [{ ...baselinePkg, name: "foo", publish: null }],
