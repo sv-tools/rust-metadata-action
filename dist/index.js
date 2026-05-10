@@ -27976,7 +27976,7 @@ __webpack_async_result__();
 /* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
 /* harmony export */   eF: () => (/* binding */ run)
 /* harmony export */ });
-/* unused harmony exports ensureToolchain, runCargoMetadata, compareSemver, parseCargoInfoVersion, getPublishedVersion, getMaxPublishedVersion, asyncPool, parseMetadata, filterPublishable, writeOutputs */
+/* unused harmony exports ensureToolchain, runCargoMetadata, compareSemver, parseCargoInfoVersion, getPublishedVersion, getMaxPublishedVersion, asyncPool, parseExcludeList, parseExcludeFeatures, parseMetadata, filterPublishable, validateExclusions, writeOutputs */
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(2698);
 /* harmony import */ var child_process__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(5317);
 /* harmony import */ var path__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(6928);
@@ -28253,15 +28253,68 @@ async function asyncPool(limit, items, worker) {
   return results;
 }
 
-function parseMetadata(metadata) {
+// Split a comma-separated input into trimmed, non-empty entries. Used for
+// every `*-exclude*` input — workflows can write either an inline list
+// (`a,b,c`) or use YAML's folded form to span lines, both flatten the same
+// way after trimming.
+function parseExcludeList(input) {
+  if (!input) return [];
+  return input
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+// Parse `matrix-exclude-features` entries into two buckets:
+//   global    — feature names with no `:` (excluded from every package)
+//   byPackage — `<package>:<feature>` entries grouped by package name
+// Both halves around the `:` are trimmed (so `foo: nightly` matches a
+// `nightly` feature). Empty halves (`:foo`, `bar:`) are dropped.
+function parseExcludeFeatures(input) {
+  const global = new Set();
+  const byPackage = new Map();
+  for (const entry of parseExcludeList(input)) {
+    const idx = entry.indexOf(":");
+    if (idx === -1) {
+      global.add(entry);
+      continue;
+    }
+    const pkg = entry.slice(0, idx).trim();
+    const feat = entry.slice(idx + 1).trim();
+    if (!pkg || !feat) continue;
+    if (!byPackage.has(pkg)) byPackage.set(pkg, new Set());
+    byPackage.get(pkg).add(feat);
+  }
+  return { global, byPackage };
+}
+
+// `options` keys mirror their action input names (camelCased):
+//   packagesExclude        — names dropped from `packages` output
+//   publishExclude         — names dropped from `publish` output
+//   matrixExcludePackages  — names dropped from `matrix` output
+//   matrixExcludeFeatures  — { global, byPackage } features dropped from matrix
+// Each output's exclusion is independent — excluding a package from `matrix`
+// does not remove it from `packages` or `publish`, and so on. Compose them
+// to get the behavior you want. `rust-version`/`edition` are computed from
+// every package regardless of excludes (they describe the workspace).
+function parseMetadata(metadata, options = {}) {
+  const packagesExclude = new Set(options.packagesExclude ?? []);
+  const publishExclude = new Set(options.publishExclude ?? []);
+  const matrixExcludePackages = new Set(options.matrixExcludePackages ?? []);
+  const matrixExcludeFeatures = options.matrixExcludeFeatures ?? {
+    global: new Set(),
+    byPackage: new Map(),
+  };
   const packages = [];
   const publishCandidates = [];
   const matrix = [];
   let rustVersion = null;
   let edition = null;
   for (const pkg of metadata.packages ?? []) {
-    packages.push(pkg.name);
-    if (isPublishable(pkg)) {
+    if (!packagesExclude.has(pkg.name)) {
+      packages.push(pkg.name);
+    }
+    if (isPublishable(pkg) && !publishExclude.has(pkg.name)) {
       // `publish = ["a", "b", ...]` declares every registry the crate may
       // be published to. We need to query *all* of them and compare against
       // the highest version found, since the user picks the target with
@@ -28277,14 +28330,23 @@ function parseMetadata(metadata) {
         registries,
       });
     }
-    // Sort so matrix output is stable regardless of cargo's feature
-    // emission order (currently a BTreeMap, but not contractually so).
-    const features = Object.keys(pkg.features ?? {}).sort();
-    if (features.length === 0) {
-      matrix.push(`--package=${pkg.name}`);
-    } else {
-      for (const feature of features) {
-        matrix.push(`--package=${pkg.name} --features=${feature}`);
+    if (!matrixExcludePackages.has(pkg.name)) {
+      // Sort so matrix output is stable regardless of cargo's feature
+      // emission order (currently a BTreeMap, but not contractually so).
+      const allFeatures = Object.keys(pkg.features ?? {}).sort();
+      const pkgScoped = matrixExcludeFeatures.byPackage.get(pkg.name);
+      const features = allFeatures.filter(
+        (f) => !matrixExcludeFeatures.global.has(f) && !pkgScoped?.has(f),
+      );
+      if (allFeatures.length === 0) {
+        matrix.push(`--package=${pkg.name}`);
+      } else {
+        // If the package has features but every one of them got excluded,
+        // emit nothing for it — the user said "skip these features", not
+        // "fall back to no-features mode".
+        for (const feature of features) {
+          matrix.push(`--package=${pkg.name} --features=${feature}`);
+        }
       }
     }
     if (pkg.rust_version != null) {
@@ -28350,9 +28412,69 @@ async function filterPublishable(candidates, cwd) {
   return resolved.filter((name) => name !== null);
 }
 
-async function writeOutputs(metadata, cwd) {
+// Verify every name listed in the exclude inputs corresponds to a real
+// package / feature in the workspace. Returns an array of error messages —
+// empty if everything resolves. Catches typos like
+// `matrix-exclude-packages: my-crate` (the actual crate is `mycrate`).
+//
+// Validation is strict by design: an exclude input that silently matches
+// nothing tends to mean the workflow author thought they were filtering a
+// crate when they weren't, and the bug shows up months later as
+// "why is this thing being published / tested".
+function validateExclusions(metadata, options = {}) {
+  const pkgs = metadata.packages ?? [];
+  const pkgNames = new Set(pkgs.map((p) => p.name));
+  const featuresByPkg = new Map(
+    pkgs.map((p) => [p.name, new Set(Object.keys(p.features ?? {}))]),
+  );
+  // Union of features across the workspace — for validating bare entries
+  // in `matrix-exclude-features` (which apply globally rather than to a
+  // specific package).
+  const allFeatures = new Set();
+  for (const set of featuresByPkg.values()) {
+    for (const f of set) allFeatures.add(f);
+  }
+  const errors = [];
+  const checkPkgList = (input, names) => {
+    for (const name of names ?? []) {
+      if (!pkgNames.has(name)) {
+        errors.push(`${input}: unknown package "${name}"`);
+      }
+    }
+  };
+  checkPkgList("packages-exclude", options.packagesExclude);
+  checkPkgList("publish-exclude", options.publishExclude);
+  checkPkgList("matrix-exclude-packages", options.matrixExcludePackages);
+  const f = options.matrixExcludeFeatures;
+  if (f) {
+    for (const feat of f.global ?? new Set()) {
+      if (!allFeatures.has(feat)) {
+        errors.push(
+          `matrix-exclude-features: unknown feature "${feat}" — not declared by any package`,
+        );
+      }
+    }
+    for (const [pkg, feats] of f.byPackage ?? new Map()) {
+      if (!pkgNames.has(pkg)) {
+        errors.push(`matrix-exclude-features: unknown package "${pkg}"`);
+        continue;
+      }
+      const decl = featuresByPkg.get(pkg);
+      for (const feat of feats) {
+        if (!decl.has(feat)) {
+          errors.push(
+            `matrix-exclude-features: package "${pkg}" does not declare feature "${feat}"`,
+          );
+        }
+      }
+    }
+  }
+  return errors;
+}
+
+async function writeOutputs(metadata, cwd, options = {}) {
   const { packages, publishCandidates, matrix, rustVersion, edition } =
-    parseMetadata(metadata);
+    parseMetadata(metadata, options);
   const publish = await filterPublishable(publishCandidates, cwd);
   (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("metadata", JSON.stringify(metadata));
   (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("packages", JSON.stringify(packages));
@@ -28364,10 +28486,30 @@ async function writeOutputs(metadata, cwd) {
 
 async function run() {
   const manifestPath = (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .getInput */ .V4)("manifest-path");
+  const packagesExclude = parseExcludeList((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .getInput */ .V4)("packages-exclude"));
+  const publishExclude = parseExcludeList((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .getInput */ .V4)("publish-exclude"));
+  const matrixExcludePackages = parseExcludeList(
+    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .getInput */ .V4)("matrix-exclude-packages"),
+  );
+  const matrixExcludeFeatures = parseExcludeFeatures(
+    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .getInput */ .V4)("matrix-exclude-features"),
+  );
   ensureToolchain(manifestPath);
   const metadata = await runCargoMetadata(manifestPath);
+  const options = {
+    packagesExclude,
+    publishExclude,
+    matrixExcludePackages,
+    matrixExcludeFeatures,
+  };
+  const errors = validateExclusions(metadata, options);
+  if (errors.length > 0) {
+    // Fail loudly before writing any outputs — a typo in an exclude input
+    // would otherwise silently widen the matrix / publish set.
+    throw new Error("Invalid exclusion inputs:\n  " + errors.join("\n  "));
+  }
   const cwd = (0,path__WEBPACK_IMPORTED_MODULE_2__.dirname)((0,path__WEBPACK_IMPORTED_MODULE_2__.resolve)(manifestPath));
-  await writeOutputs(metadata, cwd);
+  await writeOutputs(metadata, cwd, options);
 }
 
 
