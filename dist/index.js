@@ -28506,9 +28506,7 @@ async function run() {
   if (errors.length > 0) {
     // Fail loudly before writing any outputs — a typo in an exclude input
     // would otherwise silently widen the matrix / publish set.
-    throw new Error(
-      "Invalid exclusion inputs:\n  " + errors.join("\n  "),
-    );
+    throw new Error("Invalid exclusion inputs:\n  " + errors.join("\n  "));
   }
   const cwd = (0,path__WEBPACK_IMPORTED_MODULE_2__.dirname)((0,path__WEBPACK_IMPORTED_MODULE_2__.resolve)(manifestPath));
   await writeOutputs(metadata, cwd, options);
