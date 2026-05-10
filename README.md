@@ -13,8 +13,12 @@ matrix).
 ## Inputs
 
 - `manifest-path`: Path to `Cargo.toml` (default: `"Cargo.toml"`).
-- `matrix-exclude-packages`: Newline- or comma-separated list of package names to drop from the `matrix` output. Excluded packages still appear in `packages` and `publish` — only matrix rows are suppressed.
-- `matrix-exclude-features`: Newline- or comma-separated list of features to drop from `matrix` rows. Each entry is either `<feature>` (excluded from every package that declares it) or `<package>:<feature>` (scoped to a single package). If every feature of a package ends up excluded, the package contributes no matrix rows — there is no bare `--package=` fallback.
+- `packages-exclude`: Comma-separated list of package names to drop from the `packages` output.
+- `publish-exclude`: Comma-separated list of package names to drop from the `publish` output. Useful for crates that are publishable per Cargo.toml but you never want this workflow to publish (e.g. mirrored or vendored copies).
+- `matrix-exclude-packages`: Comma-separated list of package names to drop from the `matrix` output. Excluded packages may still appear in `packages` and `publish` — only matrix rows are suppressed.
+- `matrix-exclude-features`: Comma-separated list of features to drop from `matrix` rows. Each entry is either `<feature>` (excluded from every package that declares it) or `<package>:<feature>` (scoped to a single package). If every feature of a package ends up excluded, the package contributes no matrix rows — there is no bare `--package=` fallback.
+
+All four `*-exclude*` inputs are independent: each only affects its own output. The action validates every name against the actual `cargo metadata` and **fails** if any excluded package or feature isn't found in the workspace — a typo won't silently widen your matrix or publish set.
 
 ## Outputs
 
@@ -40,14 +44,14 @@ jobs:
       - name: Get Rust metadata
         id: rustmeta
         uses: sv-tools/rust-metadata-action@v1
-        # Optional: skip specific packages or features in the matrix output.
+        # Optional: skip specific packages or features. Each input is a
+        # comma-separated list. Names are validated against cargo metadata —
+        # a typo fails the action.
         # with:
-        #   matrix-exclude-packages: |
-        #     experimental-pkg
-        #     internal-tool
-        #   matrix-exclude-features: |
-        #     unstable
-        #     foo:nightly
+        #   packages-exclude: experimental-pkg
+        #   publish-exclude: vendored-crate
+        #   matrix-exclude-packages: experimental-pkg, internal-tool
+        #   matrix-exclude-features: unstable, foo:nightly
       - name: Show packages
         run: |
           echo "Packages: ${{ steps.rustmeta.outputs.packages }}"

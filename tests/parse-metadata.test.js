@@ -7,6 +7,7 @@ import {
   parseExcludeFeatures,
   parseExcludeList,
   parseMetadata,
+  validateExclusions,
 } from "../lib.js";
 
 const baselinePkg = {
@@ -316,18 +317,23 @@ test("asyncPool handles empty input without spawning workers", async () => {
   assert.equal(calls, 0);
 });
 
-test("parseExcludeList splits on newlines and commas, trims, drops empties", () => {
+test("parseExcludeList splits on commas, trims, drops empties", () => {
   assert.deepEqual(parseExcludeList(""), []);
   assert.deepEqual(parseExcludeList("foo"), ["foo"]);
   assert.deepEqual(parseExcludeList("foo,bar"), ["foo", "bar"]);
   assert.deepEqual(parseExcludeList("  foo  ,  bar  "), ["foo", "bar"]);
-  assert.deepEqual(parseExcludeList("foo\nbar\n\nbaz"), ["foo", "bar", "baz"]);
-  assert.deepEqual(parseExcludeList("a, b\nc"), ["a", "b", "c"]);
+  assert.deepEqual(parseExcludeList("foo,,bar,,,baz"), ["foo", "bar", "baz"]);
+});
+
+test("parseExcludeList does NOT split on newlines (commas only)", () => {
+  // A multi-line YAML string lands here as a single entry — that's by
+  // design now. Workflows must use commas to delimit.
+  assert.deepEqual(parseExcludeList("foo\nbar"), ["foo\nbar"]);
 });
 
 test("parseExcludeFeatures separates global vs package-scoped entries", () => {
   const out = parseExcludeFeatures(
-    "unstable\nfoo:experimental,foo:nightly,bar:slow",
+    "unstable,foo:experimental,foo:nightly,bar:slow",
   );
   assert.deepEqual([...out.global], ["unstable"]);
   assert.deepEqual([...out.byPackage.get("foo")].sort(), [
@@ -346,12 +352,57 @@ test("parseExcludeFeatures drops malformed entries with empty halves", () => {
 test("parseExcludeFeatures trims whitespace around the package:feature split", () => {
   // Common YAML shapes: `foo: nightly` or `foo : nightly` — the per-half
   // trim ensures the parsed names match real package/feature names exactly.
-  const out = parseExcludeFeatures("foo: nightly\n bar :  slow ");
+  const out = parseExcludeFeatures("foo: nightly, bar :  slow ");
   assert.deepEqual([...out.byPackage.get("foo")], ["nightly"]);
   assert.deepEqual([...out.byPackage.get("bar")], ["slow"]);
 });
 
-test("excludePackages drops the package's matrix rows but keeps it in packages", () => {
+test("packagesExclude drops names from the packages output only", () => {
+  const out = parseMetadata(
+    {
+      packages: [
+        { ...baselinePkg, name: "keep", publish: null, version: "1.0.0" },
+        {
+          ...baselinePkg,
+          name: "hide",
+          publish: null,
+          version: "1.0.0",
+          features: { f: [] },
+        },
+      ],
+    },
+    { packagesExclude: ["hide"] },
+  );
+  // Dropped from `packages`, but `publish` and `matrix` are independent.
+  assert.deepEqual(out.packages, ["keep"]);
+  assert.deepEqual(
+    out.publishCandidates.map((c) => c.name),
+    ["keep", "hide"],
+  );
+  assert.deepEqual(out.matrix, [
+    "--package=keep",
+    "--package=hide --features=f",
+  ]);
+});
+
+test("publishExclude drops names from publishCandidates only", () => {
+  const out = parseMetadata(
+    {
+      packages: [
+        { ...baselinePkg, name: "keep", publish: null, version: "1.0.0" },
+        { ...baselinePkg, name: "vendored", publish: null, version: "1.0.0" },
+      ],
+    },
+    { publishExclude: ["vendored"] },
+  );
+  assert.deepEqual(out.packages, ["keep", "vendored"]);
+  assert.deepEqual(out.publishCandidates, [
+    { name: "keep", version: "1.0.0", registries: [null] },
+  ]);
+  assert.deepEqual(out.matrix, ["--package=keep", "--package=vendored"]);
+});
+
+test("matrixExcludePackages drops the package's matrix rows but keeps it elsewhere", () => {
   const out = parseMetadata(
     {
       packages: [
@@ -359,20 +410,20 @@ test("excludePackages drops the package's matrix rows but keeps it in packages",
         { ...baselinePkg, name: "drop", features: { a: [], b: [] } },
       ],
     },
-    { excludePackages: ["drop"] },
+    { matrixExcludePackages: ["drop"] },
   );
   assert.deepEqual(out.packages, ["keep", "drop"]);
   assert.deepEqual(out.matrix, ["--package=keep"]);
 });
 
-test("excludePackages still allows the package into publishCandidates", () => {
+test("matrixExcludePackages still allows the package into publishCandidates", () => {
   const out = parseMetadata(
     {
       packages: [
         { ...baselinePkg, name: "drop", publish: null, version: "1.0.0" },
       ],
     },
-    { excludePackages: ["drop"] },
+    { matrixExcludePackages: ["drop"] },
   );
   assert.deepEqual(out.publishCandidates, [
     { name: "drop", version: "1.0.0", registries: [null] },
@@ -380,7 +431,7 @@ test("excludePackages still allows the package into publishCandidates", () => {
   assert.deepEqual(out.matrix, []);
 });
 
-test("excludeFeatures global entry strips that feature from every package", () => {
+test("matrixExcludeFeatures global entry strips that feature from every package", () => {
   const out = parseMetadata(
     {
       packages: [
@@ -397,7 +448,7 @@ test("excludeFeatures global entry strips that feature from every package", () =
       ],
     },
     {
-      excludeFeatures: {
+      matrixExcludeFeatures: {
         global: new Set(["unstable"]),
         byPackage: new Map(),
       },
@@ -409,7 +460,7 @@ test("excludeFeatures global entry strips that feature from every package", () =
   ]);
 });
 
-test("excludeFeatures package-scoped entry only affects the named package", () => {
+test("matrixExcludeFeatures package-scoped entry only affects the named package", () => {
   const out = parseMetadata(
     {
       packages: [
@@ -426,7 +477,7 @@ test("excludeFeatures package-scoped entry only affects the named package", () =
       ],
     },
     {
-      excludeFeatures: {
+      matrixExcludeFeatures: {
         global: new Set(),
         byPackage: new Map([["foo", new Set(["a"])]]),
       },
@@ -448,7 +499,7 @@ test("when every feature of a package is excluded, no rows are emitted for it", 
       packages: [{ ...baselinePkg, name: "foo", features: { a: [], b: [] } }],
     },
     {
-      excludeFeatures: {
+      matrixExcludeFeatures: {
         global: new Set(["a", "b"]),
         byPackage: new Map(),
       },
@@ -456,6 +507,98 @@ test("when every feature of a package is excluded, no rows are emitted for it", 
   );
   assert.deepEqual(out.matrix, []);
   assert.deepEqual(out.packages, ["foo"]);
+});
+
+test("validateExclusions accepts inputs that all map to real packages/features", () => {
+  const metadata = {
+    packages: [
+      { ...baselinePkg, name: "foo", features: { default: [], full: [] } },
+      { ...baselinePkg, name: "bar", features: { extra: [] } },
+    ],
+  };
+  const errors = validateExclusions(metadata, {
+    packagesExclude: ["foo"],
+    publishExclude: ["bar"],
+    matrixExcludePackages: ["foo"],
+    matrixExcludeFeatures: {
+      global: new Set(["default"]),
+      byPackage: new Map([["bar", new Set(["extra"])]]),
+    },
+  });
+  assert.deepEqual(errors, []);
+});
+
+test("validateExclusions flags unknown packages in each list", () => {
+  const metadata = {
+    packages: [{ ...baselinePkg, name: "real" }],
+  };
+  const errors = validateExclusions(metadata, {
+    packagesExclude: ["typo-a"],
+    publishExclude: ["typo-b"],
+    matrixExcludePackages: ["typo-c"],
+  });
+  assert.equal(errors.length, 3);
+  assert.ok(
+    errors.some((e) => e.includes("packages-exclude") && e.includes("typo-a")),
+  );
+  assert.ok(
+    errors.some((e) => e.includes("publish-exclude") && e.includes("typo-b")),
+  );
+  assert.ok(
+    errors.some(
+      (e) => e.includes("matrix-exclude-packages") && e.includes("typo-c"),
+    ),
+  );
+});
+
+test("validateExclusions flags global features that no package declares", () => {
+  const metadata = {
+    packages: [{ ...baselinePkg, name: "foo", features: { real: [] } }],
+  };
+  const errors = validateExclusions(metadata, {
+    matrixExcludeFeatures: {
+      global: new Set(["nonexistent"]),
+      byPackage: new Map(),
+    },
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("nonexistent"));
+});
+
+test("validateExclusions flags package-scoped feature when the package lacks it", () => {
+  const metadata = {
+    packages: [{ ...baselinePkg, name: "foo", features: { a: [] } }],
+  };
+  const errors = validateExclusions(metadata, {
+    matrixExcludeFeatures: {
+      global: new Set(),
+      byPackage: new Map([["foo", new Set(["b"])]]),
+    },
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes('package "foo"'));
+  assert.ok(errors[0].includes('feature "b"'));
+});
+
+test("validateExclusions flags unknown package in matrix-exclude-features", () => {
+  const metadata = {
+    packages: [{ ...baselinePkg, name: "foo", features: { a: [] } }],
+  };
+  const errors = validateExclusions(metadata, {
+    matrixExcludeFeatures: {
+      global: new Set(),
+      byPackage: new Map([["bogus", new Set(["a"])]]),
+    },
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("matrix-exclude-features"));
+  assert.ok(errors[0].includes('"bogus"'));
+});
+
+test("validateExclusions: empty options produce no errors", () => {
+  const metadata = { packages: [{ ...baselinePkg, name: "foo" }] };
+  assert.deepEqual(validateExclusions(metadata, {}), []);
+  assert.deepEqual(validateExclusions(metadata), []);
 });
 
 test("parseMetadata with no options behaves identically to the default case", () => {
