@@ -4,6 +4,8 @@ import {
   asyncPool,
   compareSemver,
   parseCargoInfoVersion,
+  parseExcludeFeatures,
+  parseExcludeList,
   parseMetadata,
 } from "../lib.js";
 
@@ -312,4 +314,152 @@ test("asyncPool handles empty input without spawning workers", async () => {
   });
   assert.deepEqual(out, []);
   assert.equal(calls, 0);
+});
+
+test("parseExcludeList splits on newlines and commas, trims, drops empties", () => {
+  assert.deepEqual(parseExcludeList(""), []);
+  assert.deepEqual(parseExcludeList("foo"), ["foo"]);
+  assert.deepEqual(parseExcludeList("foo,bar"), ["foo", "bar"]);
+  assert.deepEqual(parseExcludeList("  foo  ,  bar  "), ["foo", "bar"]);
+  assert.deepEqual(parseExcludeList("foo\nbar\n\nbaz"), ["foo", "bar", "baz"]);
+  assert.deepEqual(parseExcludeList("a, b\nc"), ["a", "b", "c"]);
+});
+
+test("parseExcludeFeatures separates global vs package-scoped entries", () => {
+  const out = parseExcludeFeatures(
+    "unstable\nfoo:experimental,foo:nightly,bar:slow",
+  );
+  assert.deepEqual([...out.global], ["unstable"]);
+  assert.deepEqual([...out.byPackage.get("foo")].sort(), [
+    "experimental",
+    "nightly",
+  ]);
+  assert.deepEqual([...out.byPackage.get("bar")], ["slow"]);
+});
+
+test("parseExcludeFeatures drops malformed entries with empty halves", () => {
+  const out = parseExcludeFeatures(":foo,bar:");
+  assert.equal(out.global.size, 0);
+  assert.equal(out.byPackage.size, 0);
+});
+
+test("excludePackages drops the package's matrix rows but keeps it in packages", () => {
+  const out = parseMetadata(
+    {
+      packages: [
+        { ...baselinePkg, name: "keep" },
+        { ...baselinePkg, name: "drop", features: { a: [], b: [] } },
+      ],
+    },
+    { excludePackages: ["drop"] },
+  );
+  assert.deepEqual(out.packages, ["keep", "drop"]);
+  assert.deepEqual(out.matrix, ["--package=keep"]);
+});
+
+test("excludePackages still allows the package into publishCandidates", () => {
+  const out = parseMetadata(
+    {
+      packages: [
+        { ...baselinePkg, name: "drop", publish: null, version: "1.0.0" },
+      ],
+    },
+    { excludePackages: ["drop"] },
+  );
+  assert.deepEqual(out.publishCandidates, [
+    { name: "drop", version: "1.0.0", registries: [null] },
+  ]);
+  assert.deepEqual(out.matrix, []);
+});
+
+test("excludeFeatures global entry strips that feature from every package", () => {
+  const out = parseMetadata(
+    {
+      packages: [
+        {
+          ...baselinePkg,
+          name: "foo",
+          features: { default: [], unstable: [] },
+        },
+        {
+          ...baselinePkg,
+          name: "bar",
+          features: { stable: [], unstable: [] },
+        },
+      ],
+    },
+    {
+      excludeFeatures: {
+        global: new Set(["unstable"]),
+        byPackage: new Map(),
+      },
+    },
+  );
+  assert.deepEqual(out.matrix, [
+    "--package=foo --features=default",
+    "--package=bar --features=stable",
+  ]);
+});
+
+test("excludeFeatures package-scoped entry only affects the named package", () => {
+  const out = parseMetadata(
+    {
+      packages: [
+        {
+          ...baselinePkg,
+          name: "foo",
+          features: { a: [], b: [] },
+        },
+        {
+          ...baselinePkg,
+          name: "bar",
+          features: { a: [], b: [] },
+        },
+      ],
+    },
+    {
+      excludeFeatures: {
+        global: new Set(),
+        byPackage: new Map([["foo", new Set(["a"])]]),
+      },
+    },
+  );
+  assert.deepEqual(out.matrix, [
+    "--package=foo --features=b",
+    "--package=bar --features=a",
+    "--package=bar --features=b",
+  ]);
+});
+
+test("when every feature of a package is excluded, no rows are emitted for it", () => {
+  // The package originally has features, so we don't fall back to a bare
+  // `--package=foo` row — the user said "skip these features", not "fall
+  // back to no-features mode".
+  const out = parseMetadata(
+    {
+      packages: [{ ...baselinePkg, name: "foo", features: { a: [], b: [] } }],
+    },
+    {
+      excludeFeatures: {
+        global: new Set(["a", "b"]),
+        byPackage: new Map(),
+      },
+    },
+  );
+  assert.deepEqual(out.matrix, []);
+  assert.deepEqual(out.packages, ["foo"]);
+});
+
+test("parseMetadata with no options behaves identically to the default case", () => {
+  // Ensures the new options arg is fully backwards compatible: omitting it
+  // should produce exactly the same output as before.
+  const data = {
+    packages: [
+      { ...baselinePkg, name: "foo", features: { a: [] } },
+      { ...baselinePkg, name: "bar" },
+    ],
+  };
+  const a = parseMetadata(data);
+  const b = parseMetadata(data, {});
+  assert.deepEqual(a, b);
 });

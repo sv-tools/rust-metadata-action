@@ -271,7 +271,46 @@ export async function asyncPool(limit, items, worker) {
   return results;
 }
 
-export function parseMetadata(metadata) {
+// Split a newline/comma-separated input into trimmed, non-empty entries.
+// Used for the `exclude-packages` and `exclude-features` inputs, both of
+// which accept either form (or a mix) so workflows can use multi-line YAML
+// or a single inline string.
+export function parseExcludeList(input) {
+  if (!input) return [];
+  return input
+    .split(/[\n,]/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+// Parse `exclude-features` entries into two buckets:
+//   global    — feature names with no `:` (excluded from every package)
+//   byPackage — `<package>:<feature>` entries grouped by package name
+// Empty package or feature halves (`:foo`, `bar:`) are dropped.
+export function parseExcludeFeatures(input) {
+  const global = new Set();
+  const byPackage = new Map();
+  for (const entry of parseExcludeList(input)) {
+    const idx = entry.indexOf(":");
+    if (idx === -1) {
+      global.add(entry);
+      continue;
+    }
+    const pkg = entry.slice(0, idx);
+    const feat = entry.slice(idx + 1);
+    if (!pkg || !feat) continue;
+    if (!byPackage.has(pkg)) byPackage.set(pkg, new Set());
+    byPackage.get(pkg).add(feat);
+  }
+  return { global, byPackage };
+}
+
+export function parseMetadata(metadata, options = {}) {
+  const excludedPackages = new Set(options.excludePackages ?? []);
+  const excludedFeatures = options.excludeFeatures ?? {
+    global: new Set(),
+    byPackage: new Map(),
+  };
   const packages = [];
   const publishCandidates = [];
   const matrix = [];
@@ -295,14 +334,25 @@ export function parseMetadata(metadata) {
         registries,
       });
     }
-    // Sort so matrix output is stable regardless of cargo's feature
-    // emission order (currently a BTreeMap, but not contractually so).
-    const features = Object.keys(pkg.features ?? {}).sort();
-    if (features.length === 0) {
-      matrix.push(`--package=${pkg.name}`);
-    } else {
-      for (const feature of features) {
-        matrix.push(`--package=${pkg.name} --features=${feature}`);
+    // Matrix exclusion is independent of `packages`/`publish` — an excluded
+    // package still ships in those outputs; only its matrix rows are dropped.
+    if (!excludedPackages.has(pkg.name)) {
+      // Sort so matrix output is stable regardless of cargo's feature
+      // emission order (currently a BTreeMap, but not contractually so).
+      const allFeatures = Object.keys(pkg.features ?? {}).sort();
+      const pkgScoped = excludedFeatures.byPackage.get(pkg.name);
+      const features = allFeatures.filter(
+        (f) => !excludedFeatures.global.has(f) && !pkgScoped?.has(f),
+      );
+      if (allFeatures.length === 0) {
+        matrix.push(`--package=${pkg.name}`);
+      } else {
+        // If the package has features but every one of them got excluded,
+        // emit nothing for it — the user said "skip these features", not
+        // "fall back to no-features mode".
+        for (const feature of features) {
+          matrix.push(`--package=${pkg.name} --features=${feature}`);
+        }
       }
     }
     if (pkg.rust_version != null) {
@@ -368,9 +418,9 @@ export async function filterPublishable(candidates, cwd) {
   return resolved.filter((name) => name !== null);
 }
 
-export async function writeOutputs(metadata, cwd) {
+export async function writeOutputs(metadata, cwd, options = {}) {
   const { packages, publishCandidates, matrix, rustVersion, edition } =
-    parseMetadata(metadata);
+    parseMetadata(metadata, options);
   const publish = await filterPublishable(publishCandidates, cwd);
   setOutput("metadata", JSON.stringify(metadata));
   setOutput("packages", JSON.stringify(packages));
@@ -382,8 +432,12 @@ export async function writeOutputs(metadata, cwd) {
 
 export async function run() {
   const manifestPath = getInput("manifest-path");
+  const excludePackages = parseExcludeList(getInput("matrix-exclude-packages"));
+  const excludeFeatures = parseExcludeFeatures(
+    getInput("matrix-exclude-features"),
+  );
   ensureToolchain(manifestPath);
   const metadata = await runCargoMetadata(manifestPath);
   const cwd = dirname(resolvePath(manifestPath));
-  await writeOutputs(metadata, cwd);
+  await writeOutputs(metadata, cwd, { excludePackages, excludeFeatures });
 }

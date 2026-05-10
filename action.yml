@@ -8,6 +8,14 @@ inputs:
     description: "Path to the project's `Cargo.toml`. The action runs from this file's directory, so any adjacent `rust-toolchain.toml` is honored — its pinned toolchain is installed via `rustup` before metadata is read."
     required: false
     default: "Cargo.toml"
+  matrix-exclude-packages:
+    description: "Newline- or comma-separated list of package names to drop from the `matrix` output. Excluded packages still appear in `packages` and `publish`; only matrix rows are suppressed."
+    required: false
+    default: ""
+  matrix-exclude-features:
+    description: "Newline- or comma-separated list of features to drop from `matrix` rows. Each entry is either `<feature>` (excluded from every package that declares it) or `<package>:<feature>` (scoped to that package). If every feature of a package is excluded, the package contributes no matrix rows at all (no bare `--package=` fallback)."
+    required: false
+    default: ""
 outputs:
   metadata:
     description: "Full `cargo metadata --no-deps` output as a JSON-encoded string. Use `fromJson` in workflow expressions to parse it."

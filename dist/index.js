@@ -27976,7 +27976,7 @@ __webpack_async_result__();
 /* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
 /* harmony export */   eF: () => (/* binding */ run)
 /* harmony export */ });
-/* unused harmony exports ensureToolchain, runCargoMetadata, compareSemver, parseCargoInfoVersion, getPublishedVersion, getMaxPublishedVersion, asyncPool, parseMetadata, filterPublishable, writeOutputs */
+/* unused harmony exports ensureToolchain, runCargoMetadata, compareSemver, parseCargoInfoVersion, getPublishedVersion, getMaxPublishedVersion, asyncPool, parseExcludeList, parseExcludeFeatures, parseMetadata, filterPublishable, writeOutputs */
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(2698);
 /* harmony import */ var child_process__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(5317);
 /* harmony import */ var path__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(6928);
@@ -28253,7 +28253,46 @@ async function asyncPool(limit, items, worker) {
   return results;
 }
 
-function parseMetadata(metadata) {
+// Split a newline/comma-separated input into trimmed, non-empty entries.
+// Used for the `exclude-packages` and `exclude-features` inputs, both of
+// which accept either form (or a mix) so workflows can use multi-line YAML
+// or a single inline string.
+function parseExcludeList(input) {
+  if (!input) return [];
+  return input
+    .split(/[\n,]/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+// Parse `exclude-features` entries into two buckets:
+//   global    — feature names with no `:` (excluded from every package)
+//   byPackage — `<package>:<feature>` entries grouped by package name
+// Empty package or feature halves (`:foo`, `bar:`) are dropped.
+function parseExcludeFeatures(input) {
+  const global = new Set();
+  const byPackage = new Map();
+  for (const entry of parseExcludeList(input)) {
+    const idx = entry.indexOf(":");
+    if (idx === -1) {
+      global.add(entry);
+      continue;
+    }
+    const pkg = entry.slice(0, idx);
+    const feat = entry.slice(idx + 1);
+    if (!pkg || !feat) continue;
+    if (!byPackage.has(pkg)) byPackage.set(pkg, new Set());
+    byPackage.get(pkg).add(feat);
+  }
+  return { global, byPackage };
+}
+
+function parseMetadata(metadata, options = {}) {
+  const excludedPackages = new Set(options.excludePackages ?? []);
+  const excludedFeatures = options.excludeFeatures ?? {
+    global: new Set(),
+    byPackage: new Map(),
+  };
   const packages = [];
   const publishCandidates = [];
   const matrix = [];
@@ -28277,14 +28316,25 @@ function parseMetadata(metadata) {
         registries,
       });
     }
-    // Sort so matrix output is stable regardless of cargo's feature
-    // emission order (currently a BTreeMap, but not contractually so).
-    const features = Object.keys(pkg.features ?? {}).sort();
-    if (features.length === 0) {
-      matrix.push(`--package=${pkg.name}`);
-    } else {
-      for (const feature of features) {
-        matrix.push(`--package=${pkg.name} --features=${feature}`);
+    // Matrix exclusion is independent of `packages`/`publish` — an excluded
+    // package still ships in those outputs; only its matrix rows are dropped.
+    if (!excludedPackages.has(pkg.name)) {
+      // Sort so matrix output is stable regardless of cargo's feature
+      // emission order (currently a BTreeMap, but not contractually so).
+      const allFeatures = Object.keys(pkg.features ?? {}).sort();
+      const pkgScoped = excludedFeatures.byPackage.get(pkg.name);
+      const features = allFeatures.filter(
+        (f) => !excludedFeatures.global.has(f) && !pkgScoped?.has(f),
+      );
+      if (allFeatures.length === 0) {
+        matrix.push(`--package=${pkg.name}`);
+      } else {
+        // If the package has features but every one of them got excluded,
+        // emit nothing for it — the user said "skip these features", not
+        // "fall back to no-features mode".
+        for (const feature of features) {
+          matrix.push(`--package=${pkg.name} --features=${feature}`);
+        }
       }
     }
     if (pkg.rust_version != null) {
@@ -28350,9 +28400,9 @@ async function filterPublishable(candidates, cwd) {
   return resolved.filter((name) => name !== null);
 }
 
-async function writeOutputs(metadata, cwd) {
+async function writeOutputs(metadata, cwd, options = {}) {
   const { packages, publishCandidates, matrix, rustVersion, edition } =
-    parseMetadata(metadata);
+    parseMetadata(metadata, options);
   const publish = await filterPublishable(publishCandidates, cwd);
   (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("metadata", JSON.stringify(metadata));
   (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("packages", JSON.stringify(packages));
@@ -28364,10 +28414,14 @@ async function writeOutputs(metadata, cwd) {
 
 async function run() {
   const manifestPath = (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .getInput */ .V4)("manifest-path");
+  const excludePackages = parseExcludeList((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .getInput */ .V4)("matrix-exclude-packages"));
+  const excludeFeatures = parseExcludeFeatures(
+    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .getInput */ .V4)("matrix-exclude-features"),
+  );
   ensureToolchain(manifestPath);
   const metadata = await runCargoMetadata(manifestPath);
   const cwd = (0,path__WEBPACK_IMPORTED_MODULE_2__.dirname)((0,path__WEBPACK_IMPORTED_MODULE_2__.resolve)(manifestPath));
-  await writeOutputs(metadata, cwd);
+  await writeOutputs(metadata, cwd, { excludePackages, excludeFeatures });
 }
 
 
