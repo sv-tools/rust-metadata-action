@@ -343,6 +343,14 @@ test("parseExcludeFeatures drops malformed entries with empty halves", () => {
   assert.equal(out.byPackage.size, 0);
 });
 
+test("parseExcludeFeatures trims whitespace around the package:feature split", () => {
+  // Common YAML shapes: `foo: nightly` or `foo : nightly` — the per-half
+  // trim ensures the parsed names match real package/feature names exactly.
+  const out = parseExcludeFeatures("foo: nightly\n bar :  slow ");
+  assert.deepEqual([...out.byPackage.get("foo")], ["nightly"]);
+  assert.deepEqual([...out.byPackage.get("bar")], ["slow"]);
+});
+
 test("excludePackages drops the package's matrix rows but keeps it in packages", () => {
   const out = parseMetadata(
     {

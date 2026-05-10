@@ -272,9 +272,9 @@ export async function asyncPool(limit, items, worker) {
 }
 
 // Split a newline/comma-separated input into trimmed, non-empty entries.
-// Used for the `exclude-packages` and `exclude-features` inputs, both of
-// which accept either form (or a mix) so workflows can use multi-line YAML
-// or a single inline string.
+// Used for the `matrix-exclude-packages` and `matrix-exclude-features`
+// inputs, both of which accept either form (or a mix) so workflows can use
+// multi-line YAML or a single inline string.
 export function parseExcludeList(input) {
   if (!input) return [];
   return input
@@ -283,10 +283,11 @@ export function parseExcludeList(input) {
     .filter((s) => s.length > 0);
 }
 
-// Parse `exclude-features` entries into two buckets:
+// Parse `matrix-exclude-features` entries into two buckets:
 //   global    — feature names with no `:` (excluded from every package)
 //   byPackage — `<package>:<feature>` entries grouped by package name
-// Empty package or feature halves (`:foo`, `bar:`) are dropped.
+// Both halves around the `:` are trimmed (so `foo: nightly` matches a
+// `nightly` feature). Empty halves (`:foo`, `bar:`) are dropped.
 export function parseExcludeFeatures(input) {
   const global = new Set();
   const byPackage = new Map();
@@ -296,8 +297,8 @@ export function parseExcludeFeatures(input) {
       global.add(entry);
       continue;
     }
-    const pkg = entry.slice(0, idx);
-    const feat = entry.slice(idx + 1);
+    const pkg = entry.slice(0, idx).trim();
+    const feat = entry.slice(idx + 1).trim();
     if (!pkg || !feat) continue;
     if (!byPackage.has(pkg)) byPackage.set(pkg, new Set());
     byPackage.get(pkg).add(feat);
