@@ -271,6 +271,16 @@ test("parseCargoInfoVersion is case-insensitive on the key", () => {
   assert.equal(parseCargoInfoVersion("Version: 0.1.0\n"), "0.1.0");
 });
 
+test("parseCargoInfoVersion strips ANSI escapes from cargo's colorized output", () => {
+  // What `cargo info` emits when CARGO_TERM_COLOR=always is set in env —
+  // the field label is wrapped in SGR codes, so a naive `^version:` regex
+  // would miss it. Reproduces the CI warning seen against sv-tools/roas.
+  const stdout =
+    "\x1b[1m\x1b[92mversion:\x1b[0m 0.6.0\n" +
+    "\x1b[1m\x1b[92mlicense:\x1b[0m MIT\n";
+  assert.equal(parseCargoInfoVersion(stdout), "0.6.0");
+});
+
 test("asyncPool preserves input order", async () => {
   // Reverse-correlate delay with index so a naive implementation that
   // assigned results in completion order would scramble the output.
