@@ -42,7 +42,7 @@ export function runCargoMetadata(manifestPath) {
         "--format-version",
         "1",
       ],
-      { cwd },
+      { cwd, env: plainEnv() },
     );
 
     const stdoutChunks = [];
@@ -78,6 +78,15 @@ export function runCargoMetadata(manifestPath) {
       }
     });
   });
+}
+
+// Force cargo to emit plain text regardless of the workflow's
+// CARGO_TERM_COLOR setting. We parse stdout ourselves; ANSI escapes wrap
+// the field labels (`\e[1m\e[92mversion:\e[0m 0.6.0`) and break anchored
+// regex matches. NO_COLOR is set too as a belt-and-suspenders for any
+// non-cargo subprocess that might inherit this.
+function plainEnv() {
+  return { ...process.env, CARGO_TERM_COLOR: "never", NO_COLOR: "1" };
 }
 
 // Cargo's `publish` field semantics:
@@ -150,9 +159,13 @@ export function compareSemver(a, b) {
   return 0;
 }
 
-// Pulls the published version from cargo info's stdout.
+// Pulls the published version from cargo info's stdout. Strips ANSI SGR
+// escapes first — `getPublishedVersion` forces NO_COLOR on the spawn, but
+// the parser stays robust if anything else (e.g. a future caller) feeds it
+// colorized output.
 export function parseCargoInfoVersion(stdout) {
-  const m = stdout.match(/^version:\s*(\S+)/im);
+  const plain = stdout.replace(/\x1b\[[0-9;]*m/g, "");
+  const m = plain.match(/^version:\s*(\S+)/im);
   return m ? m[1] : null;
 }
 
@@ -174,7 +187,7 @@ export function parseCargoInfoVersion(stdout) {
 export function getPublishedVersion(pkgName, cwd, registry) {
   return new Promise((resolve, reject) => {
     const args = ["info", pkgName, "--registry", registry || "crates-io"];
-    const cmd = spawn("cargo", args, { cwd });
+    const cmd = spawn("cargo", args, { cwd, env: plainEnv() });
 
     const stdoutChunks = [];
     const stderrChunks = [];
