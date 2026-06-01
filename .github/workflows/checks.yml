@@ -50,22 +50,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       roas-matrix: ${{ steps.roas.outputs.matrix }}
-      nuspec-matrix: ${{ steps.nuspec-rs.outputs.matrix }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v5.5.0
-
-      - name: Checkout nuspec-rs as a test project
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v5.5.0
-        with:
-          repository: sv-tools/nuspec-rs
-          path: ./nuspec-rs
-      - id: nuspec-rs
-        uses: ./
-        with:
-          manifest-path: "./nuspec-rs/Cargo.toml"
-      - run: echo "Packages - ${{ steps.nuspec-rs.outputs.packages }}"
-      - run: echo "To Publish - ${{ steps.nuspec-rs.outputs.publish }}"
-      - run: echo "Matrix - ${{ steps.nuspec-rs.outputs.matrix }}"
 
       - name: Checkout roas as a test project
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v5.5.0
@@ -178,19 +164,6 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v5.5.0
         with:
           repository: sv-tools/roas
-      - name: Run tests
-        run: cargo test ${{ matrix.args }} --no-default-features --no-fail-fast --verbose
-
-  Nuspec:
-    runs-on: ubuntu-latest
-    needs: Test
-    strategy:
-      matrix:
-        args: ${{ fromJson(needs.Test.outputs.nuspec-matrix) }}
-    steps:
-      - name: Checkout nuspec-rs as a test project
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v5.5.0
-        with:
-          repository: sv-tools/nuspec-rs
+      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
       - name: Run tests
         run: cargo test ${{ matrix.args }} --no-default-features --no-fail-fast --verbose
