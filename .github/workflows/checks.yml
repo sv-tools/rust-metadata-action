@@ -175,6 +175,16 @@ jobs:
         with:
           manifest-path: tests/fixtures/workspace-release/Cargo.toml
           tag: rma-fixture-cli/v1.0.1
+      - id: tag-disabled
+        uses: ./
+        with:
+          manifest-path: tests/fixtures/workspace-release/Cargo.toml
+          tag: none
+      - name: Verify tag none skips tag handling
+        env:
+          TAG_PACKAGE: ${{ steps.tag-disabled.outputs.tag-package }}
+        run: '[ -z "$TAG_PACKAGE" ] || { echo "tag-package: $TAG_PACKAGE"; exit 1; }'
+
       - name: Verify tag mismatch failed
         if: steps.tag-mismatch.outcome != 'failure'
         run: |
