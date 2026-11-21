@@ -135,6 +135,52 @@ jobs:
           [ "$RUST_VERSION" = '1.90' ] || { echo "rust-version: $RUST_VERSION"; exit 1; }
           [ "$EDITION" = '2024' ] || { echo "edition: $EDITION"; exit 1; }
 
+      - id: workspace-release
+        uses: ./
+        with:
+          manifest-path: tests/fixtures/workspace-release/Cargo.toml
+          matrix-mode: both
+          tag: rma-fixture-cli/v1.0.0
+      - name: Verify workspace-release outputs
+        env:
+          PUBLISH: ${{ steps.workspace-release.outputs.publish }}
+          WAVES: ${{ steps.workspace-release.outputs.publish-waves }}
+          ORDER: ${{ steps.workspace-release.outputs.release-order }}
+          NEW: ${{ steps.workspace-release.outputs.new-crates }}
+          TAG_PACKAGE: ${{ steps.workspace-release.outputs.tag-package }}
+          TAG_VERSION: ${{ steps.workspace-release.outputs.tag-version }}
+          LIBS: ${{ steps.workspace-release.outputs.lib-packages }}
+          BIN_PACKAGES: ${{ steps.workspace-release.outputs.bin-packages }}
+          BINS: ${{ steps.workspace-release.outputs.bins }}
+          MATRIX: ${{ steps.workspace-release.outputs.matrix }}
+          MATRIX_INCLUDE: ${{ steps.workspace-release.outputs.matrix-include }}
+        run: |
+          [ "$PUBLISH" = '["rma-fixture-core","rma-fixture-ffi","rma-fixture-cli"]' ] || { echo "publish: $PUBLISH"; exit 1; }
+          [ "$WAVES" = '[["rma-fixture-core"],["rma-fixture-ffi"],["rma-fixture-cli"]]' ] || { echo "publish-waves: $WAVES"; exit 1; }
+          [ "$ORDER" = '["rma-fixture-core/v0.2.0","rma-fixture-ffi/v0.1.0","rma-fixture-cli/v1.0.0"]' ] || { echo "release-order: $ORDER"; exit 1; }
+          [ "$NEW" = "$PUBLISH" ] || { echo "new-crates: $NEW"; exit 1; }
+          [ "$TAG_PACKAGE" = 'rma-fixture-cli' ] || { echo "tag-package: $TAG_PACKAGE"; exit 1; }
+          [ "$TAG_VERSION" = '1.0.0' ] || { echo "tag-version: $TAG_VERSION"; exit 1; }
+          [ "$LIBS" = '["rma-fixture-core","rma-fixture-ffi"]' ] || { echo "lib-packages: $LIBS"; exit 1; }
+          [ "$BIN_PACKAGES" = '["rma-fixture-cli","rma-fixture-tool"]' ] || { echo "bin-packages: $BIN_PACKAGES"; exit 1; }
+          [ "$BINS" = '[{"package":"rma-fixture-cli","bin":"rma-cli"}]' ] || { echo "bins: $BINS"; exit 1; }
+          jq -ne --argjson got "$MATRIX" '$got | index("--package=rma-fixture-core --no-default-features --features=extra") != null' \
+            || { echo "matrix: $MATRIX"; exit 1; }
+          jq -ne --argjson got "$MATRIX_INCLUDE" '[$got[] | select(.package == "rma-fixture-cli")] | all(.lib == false and .bins == ["rma-cli"])' \
+            || { echo "matrix-include: $MATRIX_INCLUDE"; exit 1; }
+
+      - id: tag-mismatch
+        uses: ./
+        continue-on-error: true
+        with:
+          manifest-path: tests/fixtures/workspace-release/Cargo.toml
+          tag: rma-fixture-cli/v1.0.1
+      - name: Verify tag mismatch failed
+        if: steps.tag-mismatch.outcome != 'failure'
+        run: |
+          echo "::error::expected the action to fail on a tag/Cargo.toml version mismatch"
+          exit 1
+
       - id: toolchain-pinned
         uses: ./
         with:

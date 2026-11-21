@@ -23,6 +23,10 @@ test("empty workspace yields empty arrays", () => {
     packages: [],
     publishCandidates: [],
     matrix: [],
+    matrixInclude: [],
+    libPackages: [],
+    binPackages: [],
+    bins: [],
     rustVersion: "",
     edition: "",
   });
@@ -34,6 +38,10 @@ test("missing packages key yields empty arrays", () => {
     packages: [],
     publishCandidates: [],
     matrix: [],
+    matrixInclude: [],
+    libPackages: [],
+    binPackages: [],
+    bins: [],
     rustVersion: "",
     edition: "",
   });

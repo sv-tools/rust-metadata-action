@@ -1,0 +1,6 @@
+# Exercises dependency ordering, target classification and tag parsing.
+# Every crate is prefixed with `rma-fixture-` so `cargo info` never finds it
+# on crates.io — all publishable ones land in `new-crates`.
+[workspace]
+members = ["core", "ffi", "cli", "tool"]
+resolver = "2"

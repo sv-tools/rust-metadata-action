@@ -1,0 +1,13 @@
+[package]
+name = "rma-fixture-cli"
+version = "1.0.0"
+edition = "2021"
+
+[[bin]]
+name = "rma-cli"
+path = "src/main.rs"
+
+[dependencies]
+# Renamed on purpose: ordering must follow the real package name.
+core = { package = "rma-fixture-core", path = "../core" }
+rma-fixture-ffi = { path = "../ffi" }
