@@ -29,7 +29,7 @@ inputs:
     required: false
     default: "combined"
   tag:
-    description: "Release tag to parse and validate. Defaults to `github.ref` when it is a tag (`refs/tags/*`); empty on any other ref, which disables tag handling. When set, the action fails if the tag doesn't match `tag-format`, names an unknown or `publish = false` package, or its version differs from that package's Cargo.toml version."
+    description: "Release tag to parse and validate. Defaults to `github.ref` when it is a tag (`refs/tags/*`); empty on any other ref, which disables tag handling. Set to `none` to disable tag handling even on a tag push (e.g. a workflow that also runs for tags not following `tag-format`). When a tag is set, the action fails if the tag doesn't match `tag-format`, names an unknown or `publish = false` package, or its version differs from that package's Cargo.toml version."
     required: false
     default: ""
   tag-format:

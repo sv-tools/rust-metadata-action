@@ -24,7 +24,8 @@ matrix).
     non-`default` feature. Catches cfg-gated dead code and unused dependencies that only show up with a feature alone.
   - `both`: combined rows followed by isolated rows.
 - `tag`: Release tag to parse and validate. Defaults to `github.ref` when it's a tag (`refs/tags/*`), so it works on
-  `push: tags` and `release` events without configuration; on any other ref tag handling is skipped.
+  `push: tags` and `release` events without configuration; on any other ref tag handling is skipped. Set `tag: none`
+  to skip it on tag pushes too — useful when the workflow also runs for tags that don't follow `tag-format`.
 - `tag-format`: Tag naming convention (default: `{package}/v{version}`). Also used to build `release-order`. Use
   `{package}-v{version}` for release-plz style tags, or `v{version}` for a single-crate repository.
 

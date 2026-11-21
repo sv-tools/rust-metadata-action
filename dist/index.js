@@ -28606,7 +28606,7 @@ __webpack_async_result__();
 /* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
 /* harmony export */   eF: () => (/* binding */ run)
 /* harmony export */ });
-/* unused harmony exports ensureToolchain, runCargoMetadata, compareSemver, parseCargoInfoVersion, getPublishedVersion, getMaxPublishedVersion, asyncPool, parseExcludeList, parseExcludeFeatures, MATRIX_MODES, parseMatrixMode, classifyTargets, buildDepGraph, publishWaves, DEFAULT_TAG_FORMAT, parseTagFormat, formatTag, resolveTag, parseTag, parseMetadata, filterPublishable, validateExclusions, planRelease, writeOutputs */
+/* unused harmony exports ensureToolchain, runCargoMetadata, compareSemver, parseCargoInfoVersion, getPublishedVersion, getMaxPublishedVersion, asyncPool, parseExcludeList, parseExcludeFeatures, MATRIX_MODES, parseMatrixMode, classifyTargets, buildDepGraph, publishWaves, DEFAULT_TAG_FORMAT, parseTagFormat, formatTag, TAG_DISABLED, resolveTag, parseTag, parseMetadata, filterPublishable, validateExclusions, planRelease, writeOutputs */
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(2698);
 /* harmony import */ var child_process__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(5317);
 /* harmony import */ var path__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(6928);
@@ -29045,10 +29045,15 @@ function tagFormatRegex(format) {
 }
 
 // Resolve which tag (if any) the action should parse: the explicit `tag`
-// input wins; otherwise `GITHUB_REF` when it points at a tag. Returns the
-// bare tag name (no `refs/tags/` prefix) or "" when there's nothing to do.
+// input wins; otherwise `GITHUB_REF` when it points at a tag. The literal
+// `none` disables tag handling even on a tag push (an empty input can't,
+// since empty means "use GITHUB_REF"). Returns the bare tag name (no
+// `refs/tags/` prefix) or "" when there's nothing to do.
+const TAG_DISABLED = "none";
+
 function resolveTag(input, githubRef) {
   const raw = (input || "").trim();
+  if (raw.toLowerCase() === TAG_DISABLED) return "";
   if (raw) return raw.replace(/^refs\/tags\//, "");
   if (githubRef && githubRef.startsWith("refs/tags/")) {
     return githubRef.slice("refs/tags/".length);

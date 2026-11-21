@@ -334,6 +334,11 @@ test("resolveTag: explicit input wins and strips refs/tags/", () => {
   assert.equal(resolveTag("a/v1.0.0", "refs/tags/b/v2.0.0"), "a/v1.0.0");
 });
 
+test("resolveTag: `none` disables tag handling even on a tag ref", () => {
+  assert.equal(resolveTag("none", "refs/tags/a/v1.0.0"), "");
+  assert.equal(resolveTag(" NONE ", "refs/tags/a/v1.0.0"), "");
+});
+
 test("resolveTag: falls back to GITHUB_REF only for tags", () => {
   assert.equal(resolveTag("", "refs/tags/a/v1.0.0"), "a/v1.0.0");
   assert.equal(resolveTag("", "refs/heads/main"), "");
