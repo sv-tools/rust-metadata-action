@@ -24,15 +24,45 @@ inputs:
     description: "Comma-separated list of features to drop from `matrix` rows. Each entry is either `<feature>` (excluded from every package that declares it) or `<package>:<feature>` (scoped to that package). If every feature of a package is excluded, the package contributes no matrix rows at all (no bare `--package=` fallback)."
     required: false
     default: ""
+  matrix-mode:
+    description: "Which rows `matrix` / `matrix-include` contain. `combined` (default, unchanged behavior): one row per feature with default features on. `isolated`: per package, one `--no-default-features` row plus one `--no-default-features --features=<f>` row per non-`default` feature — catches cfg-gated dead code and unused dependencies. `both`: combined rows followed by isolated rows."
+    required: false
+    default: "combined"
+  tag:
+    description: "Release tag to parse and validate. Defaults to `github.ref` when it is a tag (`refs/tags/*`); empty on any other ref, which disables tag handling. When set, the action fails if the tag doesn't match `tag-format`, names an unknown or `publish = false` package, or its version differs from that package's Cargo.toml version."
+    required: false
+    default: ""
+  tag-format:
+    description: "Release tag naming convention, using `{package}` and `{version}` placeholders. Used to parse `tag` and to build `release-order`. If `{package}` is omitted (or the tag is a plain `v<version>`), the package is inferred only when the workspace has exactly one publishable package."
+    required: false
+    default: "{package}/v{version}"
 outputs:
   metadata:
     description: "Full `cargo metadata --no-deps` output as a JSON-encoded string. Use `fromJson` in workflow expressions to parse it."
   packages:
     description: 'JSON-encoded array of every package name in the workspace. Example: `["foo","bar"]`.'
   publish:
-    description: 'JSON-encoded array of package names that need to be published — i.e. their local `version` is strictly newer than what is on the registry. The action runs `cargo info` for each publishable candidate and compares versions per semver. Packages declared `publish = false` are always excluded; packages not yet on the registry are included (first publish); packages whose registry version is equal or newer are skipped. Packages restricted to a specific registry via `publish = ["my-registry"]` are queried against that registry. Example: `["foo","bar"]`.'
+    description: 'JSON-encoded array of package names that need to be published — i.e. their local `version` is strictly newer than what is on the registry. The action runs `cargo info` for each publishable candidate and compares versions per semver. Packages declared `publish = false` are always excluded; packages not yet on the registry are included (first publish); packages whose registry version is equal or newer are skipped. Packages restricted to a specific registry via `publish = ["my-registry"]` are queried against that registry. Sorted in dependency order (a crate comes after the workspace crates it depends on via normal/build path dependencies; dev-dependencies are ignored), ties broken by name. Example: `["foo","bar"]`.'
+  publish-waves:
+    description: 'JSON-encoded array of arrays: `publish` grouped into dependency waves. Crates within a wave don''t depend on each other and can be released together; each wave must be published after the previous one. Example: `[["core"],["cli","macros"]]`.'
+  release-order:
+    description: 'JSON-encoded array of release tags for `publish`, in dependency order, built from `tag-format`. Example: `["core/v0.2.0","cli/v1.1.0"]`.'
+  new-crates:
+    description: 'JSON-encoded array of `publish` entries not yet on the registry (first publish), in dependency order. A warning is emitted for each, because crates.io trusted publishing cannot create new crates. Example: `["new-crate"]`.'
+  tag-package:
+    description: "Package named by the release tag (see `tag`). Empty string when not running on a tag."
+  tag-version:
+    description: "Version from the release tag, validated against the package's Cargo.toml. Empty string when not running on a tag."
   matrix:
-    description: 'JSON-encoded array of cargo argument strings — one entry per package, or one per feature for packages that declare features. Intended for `strategy.matrix`. Example: `["--package=foo","--package=bar --features=full"]`.'
+    description: 'JSON-encoded array of cargo argument strings — one entry per package, or one per feature for packages that declare features. Intended for `strategy.matrix`. Rows depend on `matrix-mode`. Example: `["--package=foo","--package=bar --features=full"]`.'
+  matrix-include:
+    description: 'JSON-encoded array of objects for `strategy.matrix.include` — the same rows as `matrix`, with details: `{"package":"foo","features":"full","args":"--package=foo --features=full","mode":"combined","lib":true,"bins":["foo"],"publish":true}`. `lib` is true when the package has a lib/rlib/dylib/proc-macro target (doctests possible); `bins` lists its binary targets; `publish` is false for `publish = false` packages.'
+  lib-packages:
+    description: 'JSON-encoded array of every package with a library target (lib, rlib, dylib, or proc-macro). Example: `["foo"]`.'
+  bin-packages:
+    description: 'JSON-encoded array of every package with at least one binary target. Example: `["foo-cli"]`.'
+  bins:
+    description: 'JSON-encoded array of `{"package","bin"}` objects, one per binary target of each publishable package (honors `publish-exclude`). Intended for a release-binaries matrix. Example: `[{"package":"foo-cli","bin":"foo"}]`.'
   rust-version:
     description: "Workspace MSRV: the highest `rust-version` declared by any package, compared numerically (so `1.10` > `1.9`). Empty string if no package declares one. Useful for `actions-rust-lang/setup-rust-toolchain`."
   edition:

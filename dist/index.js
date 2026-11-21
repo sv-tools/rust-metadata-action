@@ -28606,7 +28606,7 @@ __webpack_async_result__();
 /* harmony export */ __nccwpck_require__.d(__webpack_exports__, {
 /* harmony export */   eF: () => (/* binding */ run)
 /* harmony export */ });
-/* unused harmony exports ensureToolchain, runCargoMetadata, compareSemver, parseCargoInfoVersion, getPublishedVersion, getMaxPublishedVersion, asyncPool, parseExcludeList, parseExcludeFeatures, parseMetadata, filterPublishable, validateExclusions, writeOutputs */
+/* unused harmony exports ensureToolchain, runCargoMetadata, compareSemver, parseCargoInfoVersion, getPublishedVersion, getMaxPublishedVersion, asyncPool, parseExcludeList, parseExcludeFeatures, MATRIX_MODES, parseMatrixMode, classifyTargets, buildDepGraph, publishWaves, DEFAULT_TAG_FORMAT, parseTagFormat, formatTag, resolveTag, parseTag, parseMetadata, filterPublishable, validateExclusions, planRelease, writeOutputs */
 /* harmony import */ var _actions_core__WEBPACK_IMPORTED_MODULE_0__ = __nccwpck_require__(2698);
 /* harmony import */ var child_process__WEBPACK_IMPORTED_MODULE_1__ = __nccwpck_require__(5317);
 /* harmony import */ var path__WEBPACK_IMPORTED_MODULE_2__ = __nccwpck_require__(6928);
@@ -28918,15 +28918,212 @@ function parseExcludeFeatures(input) {
   return { global, byPackage };
 }
 
+const MATRIX_MODES = ["combined", "isolated", "both"];
+
+// Validate the `matrix-mode` input. Empty means the default (`combined`).
+function parseMatrixMode(input) {
+  const mode = (input || "combined").trim();
+  if (!MATRIX_MODES.includes(mode)) {
+    throw new Error(
+      `matrix-mode: expected one of ${MATRIX_MODES.join(", ")}, got "${mode}"`,
+    );
+  }
+  return mode;
+}
+
+// Target kinds that make a package a "library" — something `cargo doc`
+// documents as a lib and `cargo test --doc` can run doctests for. A
+// `cdylib`-only crate is not a lib (no Rust-facing API); `cdylib` + `rlib` is.
+const LIB_KINDS = new Set(["lib", "rlib", "dylib", "proc-macro"]);
+
+// Summarize a package's targets: whether it has a library target and the
+// (sorted) names of its binary targets.
+function classifyTargets(pkg) {
+  const targets = pkg.targets ?? [];
+  const lib = targets.some((t) => (t.kind ?? []).some((k) => LIB_KINDS.has(k)));
+  const bins = targets
+    .filter((t) => (t.kind ?? []).includes("bin"))
+    .map((t) => t.name)
+    .sort();
+  return { lib, bins };
+}
+
+// Build the intra-workspace dependency graph used to order publishing:
+// package name → Set of workspace package names it depends on.
+//
+// Only path dependencies on other workspace members count, and only the
+// `normal` and `build` kinds — dev-dependencies don't constrain publish
+// order (path-only ones are stripped by `cargo publish`, and counting the
+// versioned ones would introduce cycles such as `foo-macros` dev-depending
+// on `foo`). `dep.name` is the real package name even when the dependency
+// is renamed in Cargo.toml.
+function buildDepGraph(metadata) {
+  const pkgs = metadata.packages ?? [];
+  const names = new Set(pkgs.map((p) => p.name));
+  const graph = new Map();
+  for (const pkg of pkgs) {
+    const deps = new Set();
+    for (const dep of pkg.dependencies ?? []) {
+      if (dep.kind === "dev") continue;
+      if (!dep.path) continue;
+      if (!names.has(dep.name) || dep.name === pkg.name) continue;
+      deps.add(dep.name);
+    }
+    graph.set(pkg.name, deps);
+  }
+  return graph;
+}
+
+// Group `names` into dependency waves (Kahn's algorithm on the subgraph
+// induced by `names`): wave N contains every package whose in-set
+// dependencies all live in waves < N. Packages inside a wave don't depend on
+// each other, so they can be released together. Each wave is sorted by name
+// for stable output. Dependencies outside `names` are ignored — they're not
+// being released, so they're already on the registry.
+function publishWaves(names, graph) {
+  const remaining = new Set(names);
+  const waves = [];
+  while (remaining.size > 0) {
+    const wave = [...remaining]
+      .filter((n) => [...(graph.get(n) ?? [])].every((d) => !remaining.has(d)))
+      .sort();
+    if (wave.length === 0) {
+      // Cargo itself rejects normal/build dependency cycles, so this is
+      // defensive — but never loop forever on malformed metadata.
+      throw new Error(
+        `dependency cycle among: ${[...remaining].sort().join(", ")}`,
+      );
+    }
+    for (const n of wave) remaining.delete(n);
+    waves.push(wave);
+  }
+  return waves;
+}
+
+const DEFAULT_TAG_FORMAT = "{package}/v{version}";
+
+// Semver core + optional prerelease/build. Kept strict (three numeric
+// components) so a format like `{package}-v{version}` can split
+// `foo-v2-v1.0.0` unambiguously into `foo-v2` and `1.0.0`.
+const VERSION_PATTERN =
+  "\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?";
+
+// Validate the `tag-format` input. It must contain `{version}`; `{package}`
+// is optional (single-crate repositories tag as plain `v1.2.3`). Each
+// placeholder may appear at most once.
+function parseTagFormat(input) {
+  const format = (input || DEFAULT_TAG_FORMAT).trim();
+  const count = (p) => format.split(p).length - 1;
+  if (count("{version}") !== 1) {
+    throw new Error(
+      `tag-format: must contain "{version}" exactly once, got "${format}"`,
+    );
+  }
+  if (count("{package}") > 1) {
+    throw new Error(
+      `tag-format: "{package}" may appear at most once, got "${format}"`,
+    );
+  }
+  return format;
+}
+
+function formatTag(format, name, version) {
+  return format.replace("{package}", name).replace("{version}", version);
+}
+
+function tagFormatRegex(format) {
+  const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = format
+    .split(/(\{package\}|\{version\})/)
+    .map((part) => {
+      if (part === "{package}") return "(?<package>.+?)";
+      if (part === "{version}") return `(?<version>${VERSION_PATTERN})`;
+      return escape(part);
+    })
+    .join("");
+  return new RegExp(`^${pattern}$`);
+}
+
+// Resolve which tag (if any) the action should parse: the explicit `tag`
+// input wins; otherwise `GITHUB_REF` when it points at a tag. Returns the
+// bare tag name (no `refs/tags/` prefix) or "" when there's nothing to do.
+function resolveTag(input, githubRef) {
+  const raw = (input || "").trim();
+  if (raw) return raw.replace(/^refs\/tags\//, "");
+  if (githubRef && githubRef.startsWith("refs/tags/")) {
+    return githubRef.slice("refs/tags/".length);
+  }
+  return "";
+}
+
+// Parse a release tag against `format` and validate it against the
+// workspace. Returns `{ package, version }`; throws if the tag doesn't
+// match, names an unknown or `publish = false` package, or carries a
+// version that differs from the package's Cargo.toml.
+//
+// When the format has no `{package}` (or the tag is a plain `v<version>`
+// that doesn't match the format), the package is inferred — but only if the
+// workspace has exactly one publishable package; anything else would be a
+// guess.
+function parseTag(tag, format, metadata) {
+  const pkgs = metadata.packages ?? [];
+  const publishable = pkgs.filter(isPublishable);
+  const inferSingle = () => {
+    if (publishable.length !== 1) {
+      throw new Error(
+        `tag "${tag}" does not name a package and the workspace has ` +
+          `${publishable.length} publishable packages — include ` +
+          `"{package}" in tag-format`,
+      );
+    }
+    return publishable[0].name;
+  };
+
+  let name;
+  let version;
+  const m = tag.match(tagFormatRegex(format));
+  if (m) {
+    version = m.groups.version;
+    name = m.groups.package ?? inferSingle();
+  } else {
+    const plain = tag.match(new RegExp(`^v(${VERSION_PATTERN})$`));
+    if (!plain || publishable.length !== 1) {
+      throw new Error(`tag "${tag}" does not match tag-format "${format}"`);
+    }
+    version = plain[1];
+    name = inferSingle();
+  }
+
+  const pkg = pkgs.find((p) => p.name === name);
+  if (!pkg) {
+    throw new Error(`tag "${tag}": unknown package "${name}"`);
+  }
+  if (!isPublishable(pkg)) {
+    throw new Error(
+      `tag "${tag}": package "${name}" is not publishable (publish = false)`,
+    );
+  }
+  if (pkg.version !== version) {
+    throw new Error(
+      `tag "${tag}": version ${version} does not match ${name}'s ` +
+        `Cargo.toml version ${pkg.version}`,
+    );
+  }
+  return { package: name, version };
+}
+
 // `options` keys mirror their action input names (camelCased):
 //   packagesExclude        — names dropped from `packages` output
 //   publishExclude         — names dropped from `publish` output
 //   matrixExcludePackages  — names dropped from `matrix` output
 //   matrixExcludeFeatures  — { global, byPackage } features dropped from matrix
+//   matrixMode             — "combined" (default) | "isolated" | "both"
 // Each output's exclusion is independent — excluding a package from `matrix`
 // does not remove it from `packages` or `publish`, and so on. Compose them
 // to get the behavior you want. `rust-version`/`edition` are computed from
-// every package regardless of excludes (they describe the workspace).
+// every package regardless of excludes (they describe the workspace), as are
+// `lib-packages`/`bin-packages`. `bins` follows `publish-exclude`, since it
+// describes what a release workflow ships.
 function parseMetadata(metadata, options = {}) {
   const packagesExclude = new Set(options.packagesExclude ?? []);
   const publishExclude = new Set(options.publishExclude ?? []);
@@ -28935,16 +29132,25 @@ function parseMetadata(metadata, options = {}) {
     global: new Set(),
     byPackage: new Map(),
   };
+  const matrixMode = options.matrixMode ?? "combined";
   const packages = [];
   const publishCandidates = [];
-  const matrix = [];
+  const matrixInclude = [];
+  const libPackages = [];
+  const binPackages = [];
+  const bins = [];
   let rustVersion = null;
   let edition = null;
   for (const pkg of metadata.packages ?? []) {
+    const targets = classifyTargets(pkg);
+    const publishable = isPublishable(pkg);
     if (!packagesExclude.has(pkg.name)) {
       packages.push(pkg.name);
     }
-    if (isPublishable(pkg) && !publishExclude.has(pkg.name)) {
+    if (targets.lib) libPackages.push(pkg.name);
+    if (targets.bins.length > 0) binPackages.push(pkg.name);
+    if (publishable && !publishExclude.has(pkg.name)) {
+      for (const bin of targets.bins) bins.push({ package: pkg.name, bin });
       // `publish = ["a", "b", ...]` declares every registry the crate may
       // be published to. We need to query *all* of them and compare against
       // the highest version found, since the user picks the target with
@@ -28968,14 +29174,44 @@ function parseMetadata(metadata, options = {}) {
       const features = allFeatures.filter(
         (f) => !matrixExcludeFeatures.global.has(f) && !pkgScoped?.has(f),
       );
-      if (allFeatures.length === 0) {
-        matrix.push(`--package=${pkg.name}`);
-      } else {
-        // If the package has features but every one of them got excluded,
-        // emit nothing for it — the user said "skip these features", not
-        // "fall back to no-features mode".
-        for (const feature of features) {
-          matrix.push(`--package=${pkg.name} --features=${feature}`);
+      const row = (mode, args, feature) => ({
+        package: pkg.name,
+        features: feature,
+        args,
+        mode,
+        lib: targets.lib,
+        bins: targets.bins,
+        publish: publishable,
+      });
+      const base = `--package=${pkg.name}`;
+      if (matrixMode !== "isolated") {
+        if (allFeatures.length === 0) {
+          matrixInclude.push(row("combined", base, ""));
+        } else {
+          // If the package has features but every one of them got excluded,
+          // emit nothing for it — the user said "skip these features", not
+          // "fall back to no-features mode".
+          for (const feature of features) {
+            matrixInclude.push(
+              row("combined", `${base} --features=${feature}`, feature),
+            );
+          }
+        }
+      }
+      if (matrixMode !== "combined") {
+        // Isolated rows build with default features off: once with nothing
+        // enabled, then once per feature on its own. In `both` mode a
+        // featureless package already has an equivalent combined row, so
+        // the duplicate is skipped.
+        if (allFeatures.length > 0 || matrixMode === "isolated") {
+          const noDefault = `${base} --no-default-features`;
+          matrixInclude.push(row("isolated", noDefault, ""));
+          for (const feature of features) {
+            if (feature === "default") continue;
+            matrixInclude.push(
+              row("isolated", `${noDefault} --features=${feature}`, feature),
+            );
+          }
         }
       }
     }
@@ -29000,7 +29236,11 @@ function parseMetadata(metadata, options = {}) {
   return {
     packages,
     publishCandidates,
-    matrix,
+    matrix: matrixInclude.map((r) => r.args),
+    matrixInclude,
+    libPackages,
+    binPackages,
+    bins,
     rustVersion: rustVersion ?? "",
     edition: edition ?? "",
   };
@@ -29015,6 +29255,9 @@ const PUBLISH_CHECK_CONCURRENCY = 4;
 // declared registries are kept (first publish). Network/parse failures are
 // surfaced as warnings and the candidate is skipped, so a transient outage
 // can't accidentally republish an already-published crate.
+//
+// Returns `{ name, version, published }` for each kept candidate, where
+// `published` is the registry's latest version or null for a first publish.
 async function filterPublishable(candidates, cwd) {
   const resolved = await asyncPool(
     PUBLISH_CHECK_CONCURRENCY,
@@ -29029,17 +29272,17 @@ async function filterPublishable(candidates, cwd) {
       }
       if (published === null) {
         (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .info */ .pq)(`${name}: not on registry — including for first publish`);
-        return name;
+        return { name, version, published };
       }
       if (compareSemver(version, published) > 0) {
         (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .info */ .pq)(`${name}: ${published} → ${version} (publishable)`);
-        return name;
+        return { name, version, published };
       }
       (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .info */ .pq)(`${name}: ${version} <= published ${published} (skipping)`);
       return null;
     },
   );
-  return resolved.filter((name) => name !== null);
+  return resolved.filter((r) => r !== null);
 }
 
 // Verify every name listed in the exclude inputs corresponds to a real
@@ -29102,16 +29345,64 @@ function validateExclusions(metadata, options = {}) {
   return errors;
 }
 
+// Order the publishable set by dependency and derive the release-related
+// views of it. Pure (no I/O) so it can be unit-tested; `resolved` is what
+// `filterPublishable` returns.
+function planRelease(resolved, metadata, tagFormat) {
+  const byName = new Map(resolved.map((r) => [r.name, r]));
+  const waves = publishWaves([...byName.keys()], buildDepGraph(metadata));
+  const publish = waves.flat();
+  return {
+    publish,
+    waves,
+    releaseOrder: publish.map((n) =>
+      formatTag(tagFormat, n, byName.get(n).version),
+    ),
+    newCrates: publish.filter((n) => byName.get(n).published === null),
+  };
+}
+
 async function writeOutputs(metadata, cwd, options = {}) {
-  const { packages, publishCandidates, matrix, rustVersion, edition } =
-    parseMetadata(metadata, options);
-  const publish = await filterPublishable(publishCandidates, cwd);
+  const parsed = parseMetadata(metadata, options);
+  const tagFormat = options.tagFormat ?? DEFAULT_TAG_FORMAT;
+  const resolved = await filterPublishable(parsed.publishCandidates, cwd);
+  const release = planRelease(resolved, metadata, tagFormat);
+
+  for (const name of release.newCrates) {
+    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .warning */ .$e)(
+      `${name} is not on the registry yet. crates.io trusted publishing ` +
+        `cannot create new crates — publish the first version manually ` +
+        `before tagging.`,
+    );
+  }
+  const tag = options.tag;
+  if (
+    tag &&
+    parsed.publishCandidates.some((c) => c.name === tag.package) &&
+    !release.publish.includes(tag.package)
+  ) {
+    (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .warning */ .$e)(
+      `tagged ${tag.package} ${tag.version} is not ahead of the registry ` +
+        `(already published, or the registry check failed); it is not in ` +
+        `the publish output`,
+    );
+  }
+
   (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("metadata", JSON.stringify(metadata));
-  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("packages", JSON.stringify(packages));
-  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("publish", JSON.stringify(publish));
-  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("matrix", JSON.stringify(matrix));
-  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("rust-version", rustVersion);
-  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("edition", edition);
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("packages", JSON.stringify(parsed.packages));
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("publish", JSON.stringify(release.publish));
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("publish-waves", JSON.stringify(release.waves));
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("release-order", JSON.stringify(release.releaseOrder));
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("new-crates", JSON.stringify(release.newCrates));
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("tag-package", tag?.package ?? "");
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("tag-version", tag?.version ?? "");
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("matrix", JSON.stringify(parsed.matrix));
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("matrix-include", JSON.stringify(parsed.matrixInclude));
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("lib-packages", JSON.stringify(parsed.libPackages));
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("bin-packages", JSON.stringify(parsed.binPackages));
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("bins", JSON.stringify(parsed.bins));
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("rust-version", parsed.rustVersion);
+  (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .setOutput */ .uH)("edition", parsed.edition);
 }
 
 async function run() {
@@ -29124,20 +29415,35 @@ async function run() {
   const matrixExcludeFeatures = parseExcludeFeatures(
     (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .getInput */ .V4)("matrix-exclude-features"),
   );
+  const matrixMode = parseMatrixMode((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .getInput */ .V4)("matrix-mode"));
+  const tagFormat = parseTagFormat((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .getInput */ .V4)("tag-format"));
+  const tagName = resolveTag((0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .getInput */ .V4)("tag"), process.env.GITHUB_REF);
   ensureToolchain(manifestPath);
   const metadata = await runCargoMetadata(manifestPath);
-  const options = {
+  const errors = validateExclusions(metadata, {
     packagesExclude,
     publishExclude,
     matrixExcludePackages,
     matrixExcludeFeatures,
-  };
-  const errors = validateExclusions(metadata, options);
+  });
   if (errors.length > 0) {
     // Fail loudly before writing any outputs — a typo in an exclude input
     // would otherwise silently widen the matrix / publish set.
     throw new Error("Invalid exclusion inputs:\n  " + errors.join("\n  "));
   }
+  // Validate the release tag before any registry queries: a mismatched tag
+  // must stop the release, not just produce odd outputs.
+  const tag = tagName ? parseTag(tagName, tagFormat, metadata) : null;
+  if (tag) (0,_actions_core__WEBPACK_IMPORTED_MODULE_0__/* .info */ .pq)(`release tag ${tagName}: ${tag.package} ${tag.version}`);
+  const options = {
+    packagesExclude,
+    publishExclude,
+    matrixExcludePackages,
+    matrixExcludeFeatures,
+    matrixMode,
+    tagFormat,
+    tag,
+  };
   const cwd = (0,path__WEBPACK_IMPORTED_MODULE_2__.dirname)((0,path__WEBPACK_IMPORTED_MODULE_2__.resolve)(manifestPath));
   await writeOutputs(metadata, cwd, options);
 }
